@@ -1,5 +1,5 @@
 -- Callback schema (Cloudflare D1 / SQLite)
-PRAGMA foreign_keys = ON;
+-- D1 enforces foreign keys by default.
 
 CREATE TABLE IF NOT EXISTS jobs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
