@@ -1,6 +1,9 @@
-// Runs on jobright.ai. When you click an Apply button, saves that job to Callback
-// (status "applied") and shows a small confirmation. Classic script: content scripts
-// can't be ES modules, so extract.js is loaded with a dynamic import.
+// Runs on jobright.ai.
+// - Clicking an Apply button saves the job to Callback as "saved".
+// - When jobright records that you applied (seen by jobright-hook.js), it becomes "applied";
+//   undoing that on jobright moves it back to "saved".
+// - Your Applied page syncs its 100 most recent jobs.
+// Classic script: content scripts can't be ES modules, so extract.js is loaded with a dynamic import.
 
 (() => {
   const APPLY_TEXT = /\bapply\b/i;
@@ -80,21 +83,47 @@
       return;
     }
 
-    const res = await chrome.runtime.sendMessage({ type: 'callback:save-applied', job });
+    const res = await chrome.runtime.sendMessage({ type: 'callback:save', job, status: 'saved' });
     const name = [res?.job?.company || job.company, res?.job?.role || job.role].filter(Boolean).join(' – ');
     if (!res?.ok) toast(`Callback: ${res?.error || 'save failed'}`, false);
-    else if (res.created) toast(`✓ Saved to Callback: ${name}`);
-    else toast(`✓ Already in Callback: ${name} (${res.job.status})`);
+    else if (res.created) toast(`☆ Saved to Callback: ${name}. It becomes "applied" when jobright records your application.`);
+    else toast(`Already in Callback: ${name} (${res.job.status})`);
   }
+
+  // jobright recorded (or undid) an application: mirror it in Callback.
+  window.addEventListener('message', async (e) => {
+    const data = e.data;
+    if (e.source !== window || !data || data.__callbackJobright !== true || !/^[0-9a-f]{24}$/i.test(data.jobId)) return;
+    const key = `${data.kind}:${data.jobId}`;
+    if (Date.now() - (recent.get(key) || 0) < 10_000) return;
+    recent.set(key, Date.now());
+
+    if (data.kind === 'unapply') {
+      const res = await chrome.runtime.sendMessage({ type: 'callback:unapply', url: `https://jobright.ai/jobs/info/${data.jobId}` });
+      if (res?.ok && res.job) toast(`Callback: ${res.job.company} moved back to saved`);
+      return;
+    }
+    const job = await readJob(data.jobId).catch(() => null);
+    if (!job) {
+      toast("Callback couldn't read the job you applied to. Use the Callback icon on its page.", false);
+      return;
+    }
+    const res = await chrome.runtime.sendMessage({ type: 'callback:save', job, status: 'applied' });
+    const name = [res?.job?.company || job.company, res?.job?.role || job.role].filter(Boolean).join(' – ');
+    if (!res?.ok) toast(`Callback: ${res?.error || 'save failed'}`, false);
+    else toast(`✓ Applied: ${name}${res.job.status !== 'applied' ? ` (status stays ${res.job.status})` : ''}`);
+  });
 
   document.addEventListener('click', (e) => {
     const control = applyControl(e.target);
     if (control) onApplyClick(control);
   }, true);
 
-  // On your jobright "Applied" page, copy each listed job into Callback. This fills in the
-  // role, location and pay on jobs that were created from emails. Each job is synced once.
+  // On your jobright "Applied" page, copy the most recent listed jobs into Callback. This fills
+  // in the role, location and pay on jobs that were created from emails. Each job is synced once.
+  // The page lists newest first, so only the first APPLIED_LIMIT are used.
   const SYNCED_KEY = 'jobrightSynced';
+  const APPLIED_LIMIT = 100;
   let syncing = false;
   let warned = false;
 
@@ -102,7 +131,7 @@
     if (syncing || !location.pathname.startsWith('/jobs/applied')) return;
     const ids = [...new Set([...document.querySelectorAll('a[href*="/jobs/info/"]')]
       .map((a) => a.getAttribute('href').match(JOB_ID)?.[1])
-      .filter(Boolean))];
+      .filter(Boolean))].slice(0, APPLIED_LIMIT);
     const { [SYNCED_KEY]: synced = [] } = await chrome.storage.local.get(SYNCED_KEY);
     const todo = ids.filter((id) => !synced.includes(id));
     if (!todo.length) return;
@@ -113,7 +142,7 @@
       for (const id of todo) {
         const job = await readJob(id).catch(() => null);
         if (!job) continue;
-        const res = await chrome.runtime.sendMessage({ type: 'callback:save-applied', job });
+        const res = await chrome.runtime.sendMessage({ type: 'callback:save', job, status: 'applied' });
         if (!res?.ok) {
           toast(`Callback: ${res?.error || 'sync failed'}`, false);
           break;

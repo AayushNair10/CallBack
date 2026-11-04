@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Callback",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Save job postings in one click and track every application.",
   "action": {
     "default_title": "Save this job to Callback",
@@ -14,17 +14,41 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://jobright.ai/*"],
-      "js": ["content-jobright.js"],
+      "matches": [
+        "https://jobright.ai/*"
+      ],
+      "js": [
+        "jobright-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://jobright.ai/*"
+      ],
+      "js": [
+        "content-jobright.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["extract.js"],
-      "matches": ["https://jobright.ai/*"]
+      "resources": [
+        "extract.js"
+      ],
+      "matches": [
+        "https://jobright.ai/*"
+      ]
     }
   ],
-  "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["https://*.workers.dev/*"]
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.workers.dev/*"
+  ]
 }
