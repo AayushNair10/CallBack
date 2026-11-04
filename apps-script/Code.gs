@@ -10,7 +10,8 @@
  *   API_TOKEN   the same token you set with `wrangler secret put API_TOKEN`
  *   LAST_TS     managed by the script (milliseconds since epoch)
  *
- * Run setup() once to install the trigger. Run backfill() to import the last 45 days.
+ * Run setup() once to install the trigger. Run backfill() once to import the last 45 days;
+ * it keeps scheduling itself until it's done.
  */
 
 var BATCH_SIZE = 10;            // keeps each Worker request well under D1's 50-query limit
@@ -24,9 +25,7 @@ var MAX_RUN_MS = 4.5 * 60 * 1000; // stop well before Apps Script's 6-minute lim
 var GET_PAUSE_MS = 100;         // paces downloads far below Gmail's per-user rate limit
 
 function setup() {
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'poll') ScriptApp.deleteTrigger(t);
-  });
+  deleteTriggers_('poll');
   ScriptApp.newTrigger('poll').timeBased().everyMinutes(5).create();
   props_().setProperty('LAST_TS', String(Date.now() - 60 * 60 * 1000));
   poll();
@@ -43,11 +42,28 @@ function poll() {
   });
 }
 
-/** Imports the last 45 days without notifications. Safe to run repeatedly; it resumes. */
+/**
+ * Imports the last 45 days without notifications, oldest first. Each run stops before the
+ * 6-minute limit and schedules the next one, until everything is imported.
+ */
 function backfill() {
-  withLock_(function () {
-    var done = sync_(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000, BACKFILL_MAX_MESSAGES, false);
-    console.log(done ? 'Callback: backfill complete' : 'Callback: backfill paused, run backfill() again to continue');
+  deleteTriggers_('backfill');
+  var done = false;
+  var ran = withLock_(function () {
+    done = sync_(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000, BACKFILL_MAX_MESSAGES, false);
+  });
+  if (ran && done) {
+    console.log('Callback: backfill complete');
+    return;
+  }
+  ScriptApp.newTrigger('backfill').timeBased().after(60 * 1000).create();
+  console.log(ran ? 'Callback: backfill paused at the time limit; it continues by itself in about a minute'
+    : 'Callback: busy with a sync; backfill retries in about a minute');
+}
+
+function deleteTriggers_(handler) {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === handler) ScriptApp.deleteTrigger(t);
   });
 }
 
@@ -254,17 +270,19 @@ function config_() {
   return { url: url, token: token };
 }
 
+/** Runs fn while holding the script lock. Returns false if another run holds it. */
 function withLock_(fn) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10 * 1000)) {
     console.log('Callback: another run is in progress, skipping');
-    return;
+    return false;
   }
   try {
     fn();
   } finally {
     lock.releaseLock();
   }
+  return true;
 }
 
 function props_() {
