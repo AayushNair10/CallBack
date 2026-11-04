@@ -138,13 +138,28 @@ function findPart_(part, mimeType) {
 }
 
 function decodePart_(part) {
-  var bytes = Utilities.base64DecodeWebSafe(part.body.data);
+  var bytes = partBytes_(part.body.data);
+  if (!bytes) return '';
   var type = headerMap_(part)['content-type'] || '';
   var m = type.match(/charset="?([^";\s]+)/i);
   try {
     return Utilities.newBlob(bytes).getDataAsString(m ? m[1] : 'UTF-8');
   } catch (e) {
     return Utilities.newBlob(bytes).getDataAsString('UTF-8');
+  }
+}
+
+// The advanced service usually returns body data as an already-decoded byte array;
+// the raw REST API returns unpadded base64url. Handle both, and skip what can't be read.
+function partBytes_(data) {
+  if (data && typeof data !== 'string') return data;
+  try {
+    var b64 = String(data || '').replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    return Utilities.base64Decode(b64);
+  } catch (e) {
+    console.log('Callback: could not decode a message body (%s)', e.message);
+    return null;
   }
 }
 
