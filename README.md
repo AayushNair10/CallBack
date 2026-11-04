@@ -6,7 +6,7 @@ My personal job-application tracker.
 - **Applications I never saved still show up**: a "thanks for applying" email (or an OA, interview or rejection) that matches no saved job creates the job automatically.
 - **Cloudflare Worker + D1** stores jobs, recruiting emails and a status history.
 - **Google Apps Script** reads Gmail every 5 minutes on Google's servers (Spam folder included) and posts new mail to the Worker. It has **read-only** Gmail access and keeps working when my laptop is off.
-- The Worker **classifies emails with plain rules** (no LLMs, no AI APIs), links each one to a saved job, moves the job's status forward, and **pushes a notification to my phone** via [ntfy.sh](https://ntfy.sh) for online assessments, interviews and offers.
+- The Worker **classifies emails with plain rules** (no LLMs, no AI APIs), links each one to a saved job, moves the job's status forward, and **pushes a notification to my phone** through a Telegram bot (or [ntfy](https://ntfy.sh)) for online assessments, interviews and offers.
 
 Plain JavaScript, no frameworks, no build step, free tiers only.
 
@@ -23,7 +23,7 @@ Plain JavaScript, no frameworks, no build step, free tiers only.
   ┌────────────────────────┐   POST /api/ingest            │ SQL      │ POST JSON
   │ Google Apps Script     │   batches of 10 messages      ▼          ▼
   │  every 5 min, on       │ ─────────────────────▶ ┌───────────┐ ┌──────────┐
-  │  Google's servers      │                        │ D1 SQLite │ │ ntfy.sh  │
+  │  Google's servers      │                        │ D1 SQLite │ │ Telegram │
   │  reads Inbox + Spam    │ ◀── results ────────── │ jobs      │ └────┬─────┘
   │  (gmail.readonly)      │                        │ emails    │      │ push
   │                        │                        │ events    │      ▼
@@ -45,7 +45,7 @@ apps-script/  Code.gs + appsscript.json: paste into a Google Apps Script project
 
 ## Setup
 
-You need Node 18+, a free Cloudflare account, a Google account, Chrome, and the ntfy app on your phone.
+You need Node 18+, a free Cloudflare account, a Google account, Chrome, and Telegram on your phone.
 
 ### 1. Deploy the Worker
 
@@ -64,10 +64,6 @@ npx wrangler d1 execute callback --remote --file=schema.sql
 openssl rand -hex 24          # copy the output
 npx wrangler secret put API_TOKEN
 
-# ntfy topic: anyone who knows it can read your notifications, so make it unguessable
-echo "callback-$(openssl rand -hex 12)"   # copy the output
-npx wrangler secret put NTFY_TOPIC
-
 npx wrangler deploy           # prints https://callback.<your-subdomain>.workers.dev
 ```
 
@@ -77,9 +73,26 @@ Check that it's up (should print `[]`):
 curl -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/jobs
 ```
 
-### 2. Phone notifications
+### 2. Phone notifications (Telegram)
 
-Install **ntfy** ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iOS](https://apps.apple.com/app/ntfy/id1625396347)), tap **+**, and subscribe to the exact topic you stored in `NTFY_TOPIC` on the default server `ntfy.sh`.
+Notifications come from your own Telegram bot. It's free, and its limits are per bot rather than per IP address. (ntfy.sh's free tier limits by IP, and Cloudflare Workers share IPs, so it quickly runs into "daily message quota reached".)
+
+1. In Telegram, open **@BotFather**, send `/newbot`, and pick a name and a username ending in `bot`. BotFather replies with a token like `123456:ABC-...`.
+2. Store it: `npx wrangler secret put TELEGRAM_BOT_TOKEN`
+3. Open your new bot in Telegram, press **Start**, and send it any message (bots can only message people who wrote to them first).
+4. Get your chat id; the Worker looks it up for you:
+   ```sh
+   curl -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/telegram-chats
+   ```
+5. Store it: `npx wrangler secret put TELEGRAM_CHAT_ID` (paste the `chat_id` number).
+6. Test it (should buzz your phone):
+   ```sh
+   curl -X POST -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/notify-test
+   ```
+
+Secrets take effect immediately; no redeploy needed. Anyone with the bot token can send messages as your bot, so keep it private.
+
+**Using ntfy instead:** leave the Telegram secrets unset and set `NTFY_TOPIC` (an unguessable topic), then subscribe to it in the ntfy app. On ntfy.sh's free tier this can fail with a 429 because of the shared-IP limit above; a paid ntfy.sh plan or a self-hosted ntfy server (set `NTFY_URL` in `wrangler.toml`, and `NTFY_TOKEN` if it needs auth) avoids that.
 
 ### 3. Gmail sync (Apps Script)
 
@@ -91,7 +104,7 @@ Install **ntfy** ([Android](https://play.google.com/store/apps/details?id=io.hec
    - `API_TOKEN` = the token from step 1
 5. Back in the editor, pick `setup` in the function dropdown and click **Run**. The consent screen should ask only to **view** your email, connect to an external service, and run when you're not present. Google will warn that the app is unverified: Gmail access is a restricted scope and Google only verifies apps published to other people, so this always appears for a personal script. Use **Advanced → Go to Callback (unsafe)**.
    `setup()` installs an every-5-minutes trigger, starts syncing from one hour ago, and runs the first sync.
-6. Optional: run `backfill()` to import the last 45 days. It doesn't send notifications and doesn't move the sync cursor. Applications from that period are created from their confirmation emails. A run stops after about 4½ minutes to stay under Apps Script's 6-minute limit; if the log says `backfill paused`, run it again and it continues where it stopped.
+6. Optional: run `backfill()` once to import the last 45 days. It doesn't send notifications and doesn't move the sync cursor. Applications from that period are created from their confirmation emails. It works oldest-first, and each run stops after about 4½ minutes (Apps Script's limit is 6), then schedules the next run a minute later by itself, until the log says `backfill complete`. A large mailbox takes several runs, so the newest applications appear last.
 
 The **Executions** tab shows each run's log (`N new of M listed, sent N`, plus a line listing any real recruiting emails sitting in Spam).
 
@@ -105,7 +118,7 @@ The script stays within Gmail's rate limits: it asks the Worker which messages i
 
 Now open any job posting and click the icon. Check the fields and click **Save**. If the posting is already saved, the popup shows "Already saved (status …)" and the button changes to **Update**.
 
-**jobright.ai**: nothing to click. When you press an **Apply** button on jobright (on a job page or in the recommendation feed), the extension reads that job and saves it as **applied**, with a green "✓ Saved to Callback" note in the corner. Chrome asks to allow the extension on jobright.ai the first time you reload it.
+**jobright.ai**: nothing to click. Opening your jobright **Applied** page (`jobright.ai/jobs/applied`) also copies every job listed there into Callback once, filling in the role, location and pay on jobs that were created from emails without them. Jobs that only exist on jobright are added with today's date as the applied date. When you press an **Apply** button on jobright (on a job page or in the recommendation feed), the extension reads that job and saves it as **applied**, with a green "✓ Saved to Callback" note in the corner. Chrome asks to allow the extension on jobright.ai the first time you reload it.
 
 > The manifest grants access to `https://*.workers.dev/*`. If you put the Worker on a custom domain, add it to `host_permissions` in `extension/manifest.json`.
 
@@ -173,15 +186,15 @@ Only `oa`, `interview` and `offer` emails trigger a push, only if they're less t
 
 Tapping the notification opens the thread in Gmail. If there's an assessment or scheduling link, the notification gets an **Open assessment** / **Open scheduler** button.
 
-**Not getting notifications?** Ask the Worker to send a test and report what ntfy answered:
+In Telegram, alerts from unmatched company domains (priority 2, "Check ·") arrive silently; the rest make a sound.
 
-```sh
-curl -X POST -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/notify-test
-```
+**Not getting notifications?** `POST /api/notify-test` (see setup step 2) sends a test and returns the service's exact reply:
 
-- `"problem": "NTFY_TOPIC is not set"`: run `npx wrangler secret put NTFY_TOPIC`.
-- `"ok": true` but nothing on the phone: the topic in the app doesn't match. Compare it with `topic_hint`, or set the secret again and resubscribe.
-- `ntfy_status` 429 or similar: ntfy.sh is rate-limiting the shared Cloudflare network. Create a free ntfy.sh account, make an access token, and store it with `npx wrangler secret put NTFY_TOKEN`; the Worker then sends as you. `npx wrangler tail` shows ntfy's reply for every notification.
+- `"problem": "No notification channel"`: the Telegram secrets (or `NTFY_TOPIC`) aren't set.
+- Telegram `401`: wrong bot token. `400`/`403`: wrong chat id, or you haven't sent the bot a message yet.
+- ntfy `429`: ntfy.sh's shared-IP limit; switch to Telegram.
+
+`npx wrangler tail` shows the reply for every notification as it happens.
 
 ### Spam
 
@@ -191,7 +204,7 @@ Gmail sometimes files real OA invites in Spam, so the script reads the Spam fold
 
 - The Apps Script has **read-only** Gmail access (`gmail.readonly`): it can't send, delete, label or move mail.
 - Email **bodies are never stored**. The Apps Script sends the first 6,000 characters for classification; the Worker keeps only metadata (sender, subject, date, category, matched job, OA/scheduling link, spam flag).
-- Everything lives in your own Cloudflare account and Google account. No third-party services see your mail except ntfy.sh, which receives the subject line of OA/interview/offer emails. Use a long random topic, or [self-host ntfy](https://docs.ntfy.sh/install/) and set `NTFY_URL` in `wrangler.toml`.
+- Everything lives in your own Cloudflare account and Google account. No third-party services see your mail except your notification channel (Telegram or ntfy), which receives the subject line of OA/interview/offer emails.
 - Every API request needs the bearer token. The dashboard renders email content with `textContent` only and only allows `http(s)` links.
 
 ## Development
@@ -222,7 +235,7 @@ curl -H "$H" -H 'Content-Type: application/json' localhost:8787/api/ingest -d '{
 }'
 ```
 
-To test notifications locally, add `NTFY_TOPIC=…` to `.dev.vars` (and optionally `NTFY_URL=` pointing at a local server).
+To test notifications locally, add `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` (or `NTFY_TOPIC`) to `.dev.vars`. `TELEGRAM_API_URL` and `NTFY_URL` can point at a local mock server.
 
 The extension has no build step: edit the files and click the reload icon on `chrome://extensions`.
 
@@ -240,7 +253,8 @@ All routes need `Authorization: Bearer <API_TOKEN>`.
 | PATCH | `/api/emails/:id` | `{category?, job_id?}`; linking advances the job |
 | POST | `/api/ingest` | Used by the Apps Script; creates jobs for unmatched application emails |
 | POST | `/api/known` | `{ids}` → which Gmail ids are already stored (lets the Apps Script skip them) |
-| POST | `/api/notify-test` | Sends a test push and returns ntfy's response |
+| POST | `/api/notify-test` | Sends a test notification and returns the service's response |
+| GET | `/api/telegram-chats` | Lists chat ids that have messaged your bot (setup helper) |
 
 ### Free-tier budget
 
