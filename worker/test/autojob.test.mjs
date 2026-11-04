@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { jobFromEmail, companyFromSender } from '../src/autojob.js';
+import { jobFromEmail, companyFromSender, cleanRole } from '../src/autojob.js';
 import { classify } from '../src/classify.js';
 
 // Classify like the Worker does, then build the job.
@@ -10,14 +10,22 @@ function auto(email) {
 }
 
 test('companyFromSender strips recruiting words', () => {
-  assert.equal(companyFromSender('Stripe Recruiting'), 'Stripe');
-  assert.equal(companyFromSender('Capital One Careers'), 'Capital One');
-  assert.equal(companyFromSender('Ramp Hiring Team'), 'Ramp');
-  assert.equal(companyFromSender('Jane at Figma'), 'Figma');
-  assert.equal(companyFromSender('Datadog via Greenhouse'), 'Datadog');
-  assert.equal(companyFromSender('Talent Acquisition - Uber'), 'Uber');
-  assert.equal(companyFromSender('Workday'), null);
-  assert.equal(companyFromSender('no-reply'), null);
+  const name = (s) => companyFromSender(s)?.name ?? null;
+  assert.equal(name('Stripe Recruiting'), 'Stripe');
+  assert.equal(name('Capital One Careers'), 'Capital One');
+  assert.equal(name('Ramp Hiring Team'), 'Ramp');
+  assert.equal(name('Jane at Figma'), 'Figma');
+  assert.equal(name('Datadog via Greenhouse'), 'Datadog');
+  assert.equal(name('Talent Acquisition - Uber'), 'Uber');
+  assert.equal(name('Workday'), null);
+  assert.equal(name('no-reply'), null);
+  // From a real inbox:
+  assert.equal(name('workday. paypal'), 'paypal');
+  assert.equal(name('workday- f5'), 'f5');
+  assert.equal(name('Workday Nordstrom'), 'Nordstrom');
+  assert.equal(name('WorkdaySystemDoNotReply'), null);
+  assert.equal(name('Early Careers at Wise'), 'Wise');
+  assert.equal(companyFromSender('Erica Saunders').org, false);
 });
 
 test('LinkedIn "application was sent" email', () => {
@@ -102,4 +110,52 @@ test('does not create jobs from noise, free mail, spam or cold interview mail', 
   assert.equal(jobFromEmail({ from_name: 'Jane at Acme', from_domain: 'acme.com', subject: 'Interview invitation', body: 'We would like to schedule an interview.' }, 'interview'), null);
   // Categories that don't change status.
   assert.equal(jobFromEmail({ from_name: 'Stripe', from_domain: 'stripe.com', subject: 'Hello', body: '' }, 'other'), null);
+});
+
+test('cleanRole keeps job titles and rejects sentence fragments (real inbox cases)', () => {
+  const cases = [
+    ['AI Product Engineer / Forward Deployed Engineer job was submitted successfully', 'AI Product Engineer / Forward Deployed Engineer'],
+    ['Software Development Engineer job was submitted successfully', 'Software Development Engineer'],
+    ['apply to the Software Engineering, New Grad', 'Software Engineering, New Grad'],
+    ['taking the time and effort to apply for the Graduate Software Engineer', 'Graduate Software Engineer'],
+    ['apply for the Working in Technology (WiT) Software Engineering - Summer 2027', 'Working in Technology (WiT) Software Engineering - Summer 2027'],
+    ['* Backend Developer', 'Backend Developer'],
+    ['Full Stack Software Workflow Engineer (PHP) - 69247', 'Full Stack Software Workflow Engineer (PHP)'],
+    ['Software Engineer, New Grad (Dec 2026)', 'Software Engineer, New Grad (Dec 2026)'],
+    ['Software Engineer - New Grad 2026', 'Software Engineer - New Grad 2026'],
+    ['Data Analyst R123456', 'Data Analyst'],
+    ['more information and support on the recruitment stages visit: Graduate and', null],
+    ['proceed with your candidacy for the current', null],
+    ['let you know that you were not selected for the', null],
+    ['determine if there is alignment with the current', null],
+    ['in this', null],
+    ['R172018 2027 University', null],
+  ];
+  for (const [input, want] of cases) assert.equal(cleanRole(input), want, input);
+});
+
+test('real-inbox company cases', () => {
+  // Workday sender names with the tenant baked in, casing taken from the email.
+  let job = jobFromEmail({ from_name: 'workday. paypal', from_addr: 'paypal@myworkday.com', from_domain: 'myworkday.com',
+    subject: 'Update on your application', body: 'Thank you for your interest in PayPal. Unfortunately we will not be moving forward.' }, 'rejection');
+  assert.equal(job.company, 'PayPal');
+  job = jobFromEmail({ from_name: 'workday- f5', from_addr: 'f5@myworkday.com', from_domain: 'myworkday.com',
+    subject: 'Thank you for applying', body: 'We received your application.' }, 'application_received');
+  assert.equal(job.company, 'F5');
+  assert.deepEqual(job.aliases, ['f5']);
+  // A recruiter's own name is not the company.
+  job = jobFromEmail({ from_name: 'Erica Saunders', from_addr: 'no-reply@ashbyhq.com', from_domain: 'ashbyhq.com',
+    subject: 'Following up on your application', body: 'Thank you for applying to Meow. We have decided to move forward with other candidates.\n\nBest,\nErica Saunders' }, 'rejection');
+  assert.equal(job.company, 'Meow');
+  job = jobFromEmail({ from_name: 'Erica Saunders', from_addr: 'no-reply@ashbyhq.com', from_domain: 'ashbyhq.com',
+    subject: 'Following up', body: 'Unfortunately we will not be moving forward.\n\nBest,\nErica Saunders' }, 'rejection');
+  assert.equal(job, null, 'no company found -> no job rather than a person name');
+  // Possessive.
+  job = jobFromEmail({ from_name: 'Notion', from_addr: 'no-reply@ashbyhq.com', from_domain: 'ashbyhq.com',
+    subject: 'Your application', body: "Thank you for your interest in Notion's Software Engineer, New Grad (Dec 2026) role." }, 'rejection');
+  assert.equal(job.company, 'Notion');
+  // Domain-looking sender name.
+  job = jobFromEmail({ from_name: 'Careers @ .questdiagnostics.com', from_addr: 'careers@questdiagnostics.com', from_domain: 'questdiagnostics.com',
+    subject: 'Thank you for applying', body: 'We received your application.' }, 'application_received');
+  assert.equal(job.company, 'Questdiagnostics');
 });

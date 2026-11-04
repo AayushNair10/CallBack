@@ -1,5 +1,6 @@
 // Builds a job from an email when it doesn't match any saved job, so applications made
 // without the extension still show up. Best-effort rules; pure functions.
+// When unsure, it leaves a field empty rather than guessing.
 
 import { domainIn, platformFor, JOB_BOARD_DOMAINS, FREE_MAIL } from './classify.js';
 import { aliasesFor, normalize } from './match.js';
@@ -7,63 +8,96 @@ import { aliasesFor, normalize } from './match.js';
 const STATUS_CATEGORIES = new Set(['application_received', 'oa', 'interview', 'offer', 'rejection']);
 const APPLIED_CONTEXT = /\byour (?:recent )?application\b|\byou(?:'ve| have)? applied\b|\bapplying\b|\bthanks? (?:you )?for applying\b/i;
 
-// Words recruiting senders put around the company name ("Stripe Recruiting", "Capital One Careers").
-const SENDER_NOISE = /\b(?:recruiting|recruitment|recruiter|careers?|talent(?: acquisition)?|acquisition|hiring|team|jobs?|hr|human resources|people|university|campus|early|notifications?|no[- ]?reply|do[- ]?not[- ]?reply|applications?|candidate|experience|staffing)\b/gi;
+const ATS_NAMES = 'workday|greenhouse|lever|ashby|icims|smartrecruiters|jobvite|workable|taleo|successfactors|bamboohr|jazzhr|breezy|recruitee|teamtailor|eightfold|phenom|avature|dover';
+// Words recruiting senders put around the company name ("Stripe Recruiting", "Workday. PayPal").
+const SENDER_NOISE = new RegExp(`\\b(?:${ATS_NAMES}|recruiting|recruitment|recruiters?|careers?|talent|acquisition|hiring|team|jobs?|hr|human resources|people|university|campus|early careers?|notifications?|no[- ]?reply|do[- ]?not[- ]?reply|noreply|donotreply|system|applications?|candidates?|experience|staffing|mailer|alerts?)\\b`, 'gi');
 const GENERIC_NAMES = new Set([
-  'workday', 'greenhouse', 'lever', 'ashby', 'icims', 'smartrecruiters', 'jobvite', 'workable', 'taleo',
-  'successfactors', 'oracle', 'bamboohr', 'linkedin', 'indeed', 'glassdoor', 'ziprecruiter', 'handshake',
+  ...ATS_NAMES.split('|'), 'oracle', 'linkedin', 'indeed', 'glassdoor', 'ziprecruiter', 'handshake',
   'hackerrank', 'codesignal', 'codility', 'hirevue', 'calendly', 'goodtime', 'gem', 'paradox', 'karat',
-  'jobright', 'notification', 'support', 'info', 'admin', 'mail', 'email', 'system', 'the', 'a', 'our', 'your',
+  'jobright', 'ripplematch', 'notification', 'support', 'info', 'admin', 'mail', 'email', 'system', 'the', 'a', 'our', 'your',
 ]);
-const BAD_COMPANY = /^(?:a|an|the|our|your|this|that|us|you|we|position|role|job|team|opportunity|software|engineer|intern)$/i;
-const BAD_ROLE_START = /^(?:a|an|this|that|our|your|the|above|following|open|same|new|any|other|it)\b/i;
+const BAD_COMPANY = /^(?:a|an|the|our|your|this|that|us|you|we|it|position|role|job|team|opportunity|software|engineer|intern|company|organization|hiring|recruiting|careers?)$/i;
+
+// A role must look like a job title...
+const TITLE_WORD = /\b(?:engineer(?:ing)?|developer|scientist|science|analyst|analytics|intern(?:ship)?|co-?op|designer|design|manager|management|programmer|architect|specialist|associate|consultant|researcher|research|sde|swe|sre|devops|qa|tester|fellow(?:ship)?|technician|administrator|admin|lead|director|coordinator|representative|officer|accountant|strategist|writer|recruiter|advisor|product|software|data|machine learning|ml|ai|security|graduate|new grad|trainee|apprentice|technologist|operations|support|sales|marketing|finance|quant|trader)\b/i;
+// ...and not like a sentence.
+const NOT_TITLE = /\b(?:you|your|we|our|us|let|know|information|visit|proceed|determine|alignment|candidacy|thank|thanks|time|effort|submitted|successfully|received|reviewing|review|please|regret|unfortunately|decided|selected|interest|considering|consideration|following|current|this|that|these|which|will|would|could|should)\b/i;
 
 const clean = (s) => String(s || '').replace(/[‘’]/g, "'").replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim();
 const compact = (s) => normalize(s).replace(/ /g, '');
 const titleCase = (s) => s.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function validCompany(s) {
-  const c = clean(s).replace(/[\s,.!:;'-]+$/, '').replace(/^[\s,.!:;'-]+/, '');
+  let c = clean(s)
+    .replace(/'s\b.*$/i, '') // "Notion's engineering team" -> "Notion"
+    .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9)&.]+$/g, '')
+    .replace(/\.$/, '');
+  if (/@/.test(c)) return null;
+  const domainLike = c.match(/^(?:[\w-]+\.)*([\w-]+)\.(?:com|net|org|io|ai|co|us|tech|dev|app)$/i);
+  if (domainLike) c = titleCase(domainLike[1]);
   if (c.length < 2 || c.length > 60 || c.split(' ').length > 6) return null;
   if (BAD_COMPANY.test(c) || GENERIC_NAMES.has(c.toLowerCase())) return null;
   if (!/[a-z]/i.test(c)) return null;
   return c;
 }
 
-function validRole(s, company) {
-  const r = clean(s).replace(/^[\s,.!:;'-]+|[\s,.!:;'-]+$/g, '');
+// Trims a captured phrase down to the job title in it, or returns null.
+export function cleanRole(s, company) {
+  let r = clean(s);
+  // Keep only what follows the last "apply for the", "to the", "for our"...
+  const lead = [...r.matchAll(/\b(?:apply(?:ing)?|applied|application|candidacy|interest|for|to|in)\s+(?:for |to |in )?(?:the|our|a|an|this)\s+/gi)].pop();
+  if (lead) r = r.slice(lead.index + lead[0].length);
+  r = r
+    .replace(/^[^A-Za-z0-9]+/, '') // "* Backend Developer"
+    .replace(/\s+(?:job|position|role|opening|opportunity|posting)?\s*(?:was|has been|have been|is|at|with|here|and we|we|that|which|on|via)\b.*$/i, '')
+    .replace(/\s+(?:job|position|role|opening|opportunity|posting)$/i, '')
+    .replace(/\s*(?:[-–—#:]\s*|\(\s*)(?:req(?:uisition)?\.?\s*(?:id)?:?\s*)?(?:R|JR|REQ)?-?\d{5,}\)?\s*$|\s+\(?(?:R|JR|REQ)-?\d{4,}\)?\s*$/i, '') // trailing req ids, not years
+    .replace(/[\s,.!:;'(-]+$/, '');
   if (r.length < 3 || r.length > 90 || r.split(' ').length > 12) return null;
-  if (BAD_ROLE_START.test(r) || /https?:|@|application|applying|thank/i.test(r)) return null;
+  if (!TITLE_WORD.test(r) || NOT_TITLE.test(r) || /https?:|@/.test(r)) return null;
   if (company && compact(r) === compact(company)) return null;
   return r;
 }
 
+// "Stripe Recruiting" -> "Stripe", "Workday. PayPal" -> "PayPal". Returns {name, org} where org says
+// the name came with a recruiting word, which a person's name never does.
 export function companyFromSender(name) {
   let n = clean(name);
   if (!n) return null;
+  if (!/\s/.test(n) && /[a-z][A-Z]/.test(n)) {
+    const split = n.replace(/([a-z])([A-Z])/g, '$1 $2'); // "WorkdaySystemDoNotReply"
+    if (SENDER_NOISE.test(split)) n = split;
+    SENDER_NOISE.lastIndex = 0;
+  }
   const at = n.match(/\s(?:at|@|from)\s+(.+)$/i); // "Jane at Stripe"
   if (at) n = at[1];
   n = n.split(/\s+(?:via|through)\s+/i)[0]; // "Stripe via Greenhouse"
-  n = n.replace(/\s+[|–—-]\s+/g, ' ').replace(SENDER_NOISE, ' ').replace(/\s+/g, ' ').trim();
-  return validCompany(n);
+  const domainLike = n.replace(/^[^A-Za-z0-9]+/, '').match(/^(?:[\w-]+\.)*([\w-]+)\.(?:com|net|org|io|ai|co|us|tech|dev|app)$/i);
+  if (domainLike) n = domainLike[1]; // "Careers @ .questdiagnostics.com"
+  const stripped = n.replace(/\s*[|–—:.-]+\s*/g, ' ').replace(SENDER_NOISE, ' ').replace(/\s+/g, ' ').trim();
+  const org = !!at || compact(stripped) !== compact(n);
+  const valid = validCompany(stripped);
+  return valid ? { name: valid, org } : null;
 }
 
 // Company names written in the subject or body, in priority order.
 const COMPANY_PATTERNS = [
   /\byour application (?:was|has been) (?:sent|submitted) to ([^\n]+?)\s*(?:$|\n|[.!])/im,
-  /\b(?:position|role|opening|opportunity|job|internship) (?:at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| has\b| is\b| and\b))/m,
-  /\b(?:applying|applied|application|apply) (?:to|at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| has\b| is\b| and\b))/m,
+  /\b(?:position|role|opening|opportunity|job|internship) (?:at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
+  /\b(?:applying|applied|application|apply) (?:to|at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
   /^([A-Z0-9][\w&.' -]{1,40}?) (?:has )?invited you\b/m,
-  /\binterest in (?:joining |working (?:at|with) |a career (?:at|with) |careers at )?([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| and\b))/m,
+  /\binterest in (?:joining |working (?:at|with) |a career (?:at|with) |careers at )?([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| and\b|'s\b))/m,
+  /\bjoin(?:ing)? (?:the )?([A-Z0-9][\w&.' -]{1,40}?) team\b/m,
 ];
 
 const ROLE_PATTERNS = [
+  /^indeed application:\s*(.+)$/im,
+  /\b(?:job )?title:\s*([^\n]{3,80})/i,
+  /\bposition:\s*([^\n]{3,80})/i,
   /\b(?:for|to) (?:the |our )?(?:position of )?([A-Za-z0-9][^\n.!?]{2,80}?) (?:position|role|opening|opportunity|internship)\b/i,
   /\b(?:application|applying|applied) (?:for|to) (?:the )?([A-Za-z0-9][^\n.!?]{2,80}?) (?:position |role )?(?:at|with) /i,
-  /\b[Aa](?:pplication|pplying|pplied) for (?:the )?([A-Z][^\n.!?]{2,80}?)(?=[.!?\n]|$| at | with )/,
-  /^indeed application:\s*(.+)$/im,
-  /\bposition:\s*([^\n]{3,80})/i,
-  /\b(?:job )?title:\s*([^\n]{3,80})/i,
+  /\b[Aa](?:pplication|pplying|pplied) (?:for|to) (?:the )?([A-Z][^\n.!?]{2,80}?)(?=[.!?\n]|$| at | with | job\b| has\b| was\b| is\b)/,
 ];
 
 function firstMatch(patterns, texts, validate) {
@@ -75,6 +109,16 @@ function firstMatch(patterns, texts, validate) {
     }
   }
   return null;
+}
+
+// Use the capitalization written in the email ("paypal" -> "PayPal") when it's there.
+function withCasing(company, texts) {
+  const re = new RegExp(`\\b${escapeRe(company)}\\b`, 'i');
+  for (const t of texts) {
+    const m = t && t.match(re);
+    if (m && m[0] !== m[0].toLowerCase()) return m[0];
+  }
+  return /^[a-z0-9 &.-]+$/.test(company) ? titleCase(company) : company;
 }
 
 // Job posting links that identify the job: LinkedIn job ids and the common ATS boards.
@@ -115,11 +159,37 @@ function linkedInDetails(body, company) {
     if (!location && lines[i + 1] && LOCATION.test(lines[i + 1])) location = lines[i + 1];
     const before = lines[i - 1];
     const after = lines[i + 1];
-    let role = before && !/your application|sent to/i.test(before) ? validRole(before, company) : null;
-    if (!role && after && after !== location) role = validRole(after, company);
+    let role = before && !/your application|sent to/i.test(before) ? cleanRole(before, company) : null;
+    if (!role && after && after !== location) role = cleanRole(after, company);
     return { role, location };
   }
   return { role: null, location: null };
+}
+
+function pickCompany({ domain, platform, board, subject, head, fromName, fromAddr }) {
+  const texts = [subject, head];
+  const fromText = firstMatch(COMPANY_PATTERNS, texts, validCompany);
+  const sender = companyFromSender(fromName);
+  // A bare two-word sender name with no recruiting words is usually a person ("Erica Saunders").
+  const senderOk = sender && (sender.org || !/\s/.test(sender.name) || new RegExp(`\\b${escapeRe(sender.name)}\\b`, 'i').test(subject));
+  const fromSender = senderOk ? sender.name : null;
+
+  if (board) return fromText;
+
+  if (platform) {
+    if (domainIn(domain, ['myworkday.com'])) {
+      // <tenant>@myworkday.com, unless it's a generic system address.
+      const local = String(fromAddr || '').split('@')[0];
+      const tenant = local && !/reply|system|notification|workday|mail|alert|recruit|career|talent/i.test(local) ? local : null;
+      return fromSender || fromText || (tenant && validCompany(tenant));
+    }
+    return platform === 'ats' ? (sender?.org && fromSender) || fromText || fromSender : fromText || fromSender;
+  }
+
+  // The company's own domain: prefer a nicely written name that agrees with the domain.
+  const label = domain.split('.').slice(-2, -1)[0] || '';
+  const agrees = (c) => c && compact(c).length >= 2 && label.includes(compact(c).slice(0, 4));
+  return [fromSender, fromText].find(agrees) || validCompany(label);
 }
 
 /**
@@ -142,27 +212,11 @@ export function jobFromEmail(email, category) {
   if (email.in_spam && !platform && !board) return null;
   if (['oa', 'interview', 'offer'].includes(category) && !platform && !APPLIED_CONTEXT.test(`${subject}\n${head}`)) return null;
 
-  const fromText = firstMatch(COMPANY_PATTERNS, [subject, head], validCompany);
-  const fromSender = companyFromSender(email.from_name);
-  let company = null;
-
-  if (board) {
-    company = fromText;
-  } else if (platform) {
-    company = (platform === 'ats' ? fromSender || fromText : fromText || fromSender) || null;
-    // Workday mails come from <tenant>@myworkday.com.
-    if (!company && domainIn(domain, ['myworkday.com'])) {
-      const local = String(email.from_addr || '').split('@')[0];
-      if (local && !/^(?:no-?reply|donotreply|workday|notifications?)$/i.test(local)) company = titleCase(local);
-    }
-  } else {
-    // The company's own domain: prefer a nicely written name that agrees with the domain.
-    const label = domain.split('.').slice(-2, -1)[0] || '';
-    company = [fromSender, fromText].find((c) => c && label.includes(compact(c).slice(0, 4)) && compact(c).length >= 2) || validCompany(titleCase(label));
-  }
+  let company = pickCompany({ domain, platform, board, subject, head, fromName: email.from_name, fromAddr: email.from_addr });
   if (!company) return null;
+  company = withCasing(company, [subject, head]);
 
-  let role = firstMatch(ROLE_PATTERNS, [subject, head], (r) => validRole(r, company));
+  let role = firstMatch(ROLE_PATTERNS, [subject, head], (r) => cleanRole(r, company));
   let location = null;
   if (domainIn(domain, ['linkedin.com'])) {
     const li = linkedInDetails(body, company);
@@ -179,4 +233,3 @@ export function jobFromEmail(email, category) {
 
   return { company, role: role || null, location, url, aliases };
 }
-

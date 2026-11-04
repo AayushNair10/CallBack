@@ -71,19 +71,58 @@ export function slugFromUrl(url) {
 
 export function aliasesFor(company, url) {
   const slug = slugFromUrl(url);
-  const list = [companyCore(company), slug ? slug.replace(/[-_]+/g, ' ').trim() : ''];
-  return [...new Set(list.map((a) => a.trim()))].filter((a) => a.length >= 3);
+  const core = companyCore(company);
+  const list = [core.length >= 2 ? core : '', slug && slug.length >= 3 ? slug.replace(/[-_]+/g, ' ').trim() : ''];
+  return [...new Set(list.map((a) => a.trim()))].filter(Boolean);
 }
 
 export function jobAliases(job) {
   const stored = String(job.aliases || '')
     .split(',')
     .map((a) => normalize(a))
-    .filter((a) => a.length >= 3);
+    .filter((a) => a.length >= 2);
   return stored.length ? stored : aliasesFor(job.company, job.url).map(normalize);
 }
 
 const ROLE_STOPWORDS = new Set(['and', 'the', 'for', 'of', 'in', 'at', 'to', 'a', 'an', 'with', 'i', 'ii', 'iii']);
+
+// First words too common to identify a company on their own ("Capital One", "General Motors").
+const GENERIC_FIRST = new Set([
+  'capital', 'general', 'united', 'american', 'national', 'first', 'global', 'digital', 'data', 'bank',
+  'new', 'open', 'smart', 'north', 'south', 'east', 'west', 'pacific', 'central', 'international',
+  'advanced', 'applied', 'modern', 'future', 'home', 'health', 'life', 'cloud', 'power', 'energy',
+  'media', 'software', 'systems', 'tech', 'labs', 'solutions', 'consulting', 'partners', 'financial',
+  'insurance', 'mutual', 'state', 'city', 'royal', 'scale', 'red', 'blue', 'green', 'black', 'white',
+  'quantum', 'rocket', 'bright', 'true', 'great', 'golden', 'silver', 'summit', 'peak', 'alpha', 'delta',
+]);
+
+// "cerebras systems" -> "cerebras", for emails that only use the short name.
+function shortName(alias) {
+  const words = alias.split(' ');
+  return words.length > 1 && words[0].length >= 5 && !GENERIC_FIRST.has(words[0]) ? words[0] : null;
+}
+
+// "Software Engineer, New Grad" and "Software Engineer - New Grad 2026" are the same role;
+// "Backend Engineer" and "Data Scientist" are not.
+export function rolesAgree(a, b) {
+  const words = (r) => new Set(roleWords(r).filter((w) => !/^\d+$/.test(w)));
+  const x = words(a);
+  const y = words(b);
+  if (!x.size || !y.size) return true;
+  const shared = [...x].filter((w) => y.has(w)).length;
+  return shared === x.size || shared === y.size || shared / new Set([...x, ...y]).size > 0.5;
+}
+
+// Same company, allowing for spacing ("Capitalone" vs "Capital One") and short names
+// ("Cerebras" vs "Cerebras Systems").
+export function sameCompany(a, b) {
+  const x = companyCore(a).replace(/ /g, '');
+  const y = companyCore(b).replace(/ /g, '');
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return short.length >= 5 && long.startsWith(short);
+}
 
 function roleWords(role) {
   return [...new Set(normalize(role).split(' '))].filter((w) => w.length >= 2 && !ROLE_STOPWORDS.has(w));
@@ -100,8 +139,13 @@ export function matchJob(jobs, email) {
   for (const job of jobs || []) {
     const aliases = jobAliases(job);
     let score = 0;
+    const label = domain.split('.').slice(-2, -1)[0] || '';
     if (aliases.some((a) => hay.includes(` ${a} `))) score += 10;
-    if (domain && aliases.some((a) => domain.includes(a.replace(/ /g, '')))) score += 20;
+    else if (aliases.some((a) => shortName(a) && hay.includes(` ${shortName(a)} `))) score += 5;
+    // Two-letter names ("f5") must equal the domain name; longer ones may be part of it.
+    const inDomain = (a) => (a.length <= 2 ? label === a : domain.includes(a));
+    if (domain && aliases.some((a) => inDomain(a.replace(/ /g, '')))) score += 20;
+    else if (domain && aliases.some((a) => shortName(a) && domain.includes(shortName(a)))) score += 15;
     if (!score) continue;
 
     score += roleWords(job.role).filter((w) => subject.includes(` ${w} `)).length;

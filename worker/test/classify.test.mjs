@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classify, domainIn, OA_DOMAINS } from '../src/classify.js';
-import { slugFromUrl, aliasesFor, companyCore, matchJob } from '../src/match.js';
+import { slugFromUrl, aliasesFor, companyCore, matchJob, rolesAgree, sameCompany } from '../src/match.js';
 
 const cat = (email) => classify(email).category;
 
@@ -203,4 +203,30 @@ test('matchJob prefers stored aliases and breaks ties by newest applied_at', () 
     { id: 2, company: 'Meta Platforms', aliases: 'meta,facebook', role: 'SWE', status: 'applied', applied_at: '2026-10-01' },
   ];
   assert.equal(matchJob(jobs, { from_name: 'Facebook Careers', from_domain: 'fb.com', subject: 'Update', body: '' }).id, 2);
+});
+
+test('rolesAgree', () => {
+  assert.ok(rolesAgree('Software Engineer, New Grad', 'Software Engineer - New Grad 2026'));
+  assert.ok(rolesAgree('Software Engineer', 'Senior Software Engineer, Payments'));
+  assert.ok(rolesAgree('Software Engineer II', 'Software Engineer'));
+  assert.ok(!rolesAgree('Backend Engineer', 'Data Scientist'));
+  assert.ok(!rolesAgree('Software Engineer, Payments', 'Software Engineer, Infrastructure'));
+});
+
+test('sameCompany', () => {
+  assert.ok(sameCompany('Capitalone', 'Capital One'));
+  assert.ok(sameCompany('Cerebras', 'Cerebras Systems'));
+  assert.ok(sameCompany('Mastercard', 'MasterCard Services'));
+  assert.ok(!sameCompany('Meta', 'Metabase'));
+  assert.ok(!sameCompany('Stripe', 'Figma'));
+});
+
+test('matchJob finds "Cerebras Systems" from an email that says "Cerebras", and F5 by its domain', () => {
+  const jobs = [
+    { id: 1, company: 'Cerebras Systems', aliases: 'cerebras systems', role: 'Software Engineer', status: 'applied', applied_at: '2026-09-01' },
+    { id: 2, company: 'F5', aliases: 'f5', role: null, status: 'applied', applied_at: '2026-09-01' },
+  ];
+  assert.equal(matchJob(jobs, { from_name: 'Cerebras Recruiting', from_domain: 'greenhouse-mail.io', subject: 'Thank you for applying to Cerebras', body: '' }).id, 1);
+  assert.equal(matchJob(jobs, { from_name: 'Talent', from_domain: 'f5.com', subject: 'Update', body: '' }).id, 2);
+  assert.equal(matchJob(jobs, { from_name: 'Shopify', from_domain: 'shopify.com', subject: 'Update', body: '' }), null);
 });

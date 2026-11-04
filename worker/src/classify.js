@@ -22,7 +22,8 @@ export const ATS_DOMAINS = [
 export const JOB_BOARD_DOMAINS = [
   'linkedin.com', 'indeed.com', 'indeedemail.com', 'glassdoor.com', 'ziprecruiter.com',
   'monster.com', 'dice.com', 'simplyhired.com', 'joinhandshake.com', 'wellfound.com',
-  'builtin.com', 'jobright.ai', 'otta.com', 'hired.com', 'simplify.jobs',
+  'builtin.com', 'jobright.ai', 'otta.com', 'hired.com', 'simplify.jobs', 'ripplematch.com', 'wayup.com',
+  'welcometothejungle.com',
 ];
 
 export const FREE_MAIL = [
