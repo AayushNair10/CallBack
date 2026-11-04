@@ -1,7 +1,8 @@
 // Callback Worker: jobs API, email ingest, status tracking and ntfy notifications.
 
-import { classify, domainIn, FREE_MAIL, CATEGORIES } from './classify.js';
-import { aliasesFor, matchJob } from './match.js';
+import { classify, domainIn, FREE_MAIL, JOB_BOARD_DOMAINS, CATEGORIES } from './classify.js';
+import { aliasesFor, companyCore, matchJob, normalize } from './match.js';
+import { jobFromEmail } from './autojob.js';
 
 const STATUSES = ['saved', 'applied', 'oa', 'interview', 'offer', 'rejected'];
 const ORDER = { saved: 0, applied: 1, oa: 2, interview: 3, offer: 4 };
@@ -145,6 +146,12 @@ async function upsertJob(env, request) {
     ? await env.DB.prepare('SELECT id FROM jobs WHERE url = ?').bind(job.url).first()
     : null;
 
+  // The same job saved from jobright, LinkedIn or an email under another URL: update that row.
+  if (!existing) {
+    const similar = await findSimilarJob(env, job);
+    if (similar) return json({ ...(await mergeInto(env, similar, job, ts)), created: false, merged: true });
+  }
+
   const row = await env.DB.prepare(
     `INSERT INTO jobs (company, role, location, pay_min, pay_max, pay_unit, currency, url, aliases, status, notes, applied_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -163,6 +170,46 @@ async function upsertJob(env, request) {
       .bind(row.id, row.status, ts).run();
   }
   return json({ ...row, created: !existing }, existing ? 200 : 201);
+}
+
+const isBoardUrl = (url) => {
+  try {
+    return domainIn(new URL(url).hostname, JOB_BOARD_DOMAINS);
+  } catch {
+    return false;
+  }
+};
+
+// Same company and same role, where at least one side has no URL or only a job-board URL.
+// Two different employer-site URLs are treated as two separate postings.
+async function findSimilarJob(env, job) {
+  const key = (name) => companyCore(name).replace(/ /g, ''); // "Capitalone" == "Capital One"
+  const core = key(job.company);
+  const role = normalize(job.role);
+  const { results } = await env.DB.prepare('SELECT * FROM jobs').all();
+  const candidates = results.filter((j) => {
+    if (key(j.company) !== core) return false;
+    if (j.url && job.url && !isBoardUrl(j.url) && !isBoardUrl(job.url)) return false;
+    return true;
+  });
+  const sameRole = candidates.filter((j) => role && normalize(j.role) === role);
+  if (sameRole.length) return sameRole[0];
+  const loose = candidates.filter((j) => !role || !j.role);
+  return loose.length === 1 ? loose[0] : null;
+}
+
+async function mergeInto(env, old, job, ts) {
+  const url = job.url && isBoardUrl(job.url) && old.url && !isBoardUrl(old.url) ? old.url : job.url || old.url;
+  const aliases = [...new Set([...String(old.aliases || '').split(','), ...aliasesFor(job.company, url)].map((a) => a.trim()).filter(Boolean))].join(',');
+  return env.DB.prepare(
+    `UPDATE jobs SET company = ?, role = COALESCE(?, role), location = COALESCE(?, location),
+       pay_min = COALESCE(?, pay_min), pay_max = COALESCE(?, pay_max), pay_unit = COALESCE(?, pay_unit),
+       currency = COALESCE(?, currency), url = ?, aliases = ?, notes = COALESCE(?, notes), updated_at = ?
+     WHERE id = ? RETURNING *`,
+  ).bind(
+    job.company, job.role, job.location, job.pay_min, job.pay_max, job.pay_unit, job.currency,
+    url, aliases || null, job.notes, ts, old.id,
+  ).first();
 }
 
 async function patchJob(env, request, id) {
@@ -300,6 +347,20 @@ async function sendNtfy(env, { plan, category, job, email, inSpam }) {
   }
 }
 
+// Lets the Apps Script skip downloading messages that are already stored.
+async function knownIds(env, request) {
+  const body = await readJson(request);
+  const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(String))].slice(0, 500);
+  if (!ids.length) return json({ known: [] });
+  const stmts = [];
+  for (let i = 0; i < ids.length; i += 90) { // D1 allows 100 bound parameters per query
+    const chunk = ids.slice(i, i + 90);
+    stmts.push(env.DB.prepare(`SELECT gmail_id FROM emails WHERE gmail_id IN (${chunk.map(() => '?').join(', ')})`).bind(...chunk));
+  }
+  const results = await env.DB.batch(stmts);
+  return json({ known: results.flatMap((r) => r.results.map((row) => row.gmail_id)) });
+}
+
 async function ingest(env, request) {
   const body = await readJson(request);
   const notify = body.notify !== false;
@@ -344,9 +405,31 @@ async function ingest(env, request) {
       body: m.body,
       list_unsubscribe: m.list_unsubscribe,
     });
-    const job = NOISE.has(category)
+    let job = NOISE.has(category)
       ? null
       : matchJob(jobs, { from_name: from.from_name, from_domain: from.from_domain, subject: m.subject, body: m.body });
+
+    // An application you never saved: create the job from the email.
+    let created = false;
+    if (!job && !NOISE.has(category)) {
+      const draft = jobFromEmail({ ...from, subject: m.subject, body: m.body, in_spam: inSpam }, category);
+      if (draft) {
+        job = (draft.url && jobs.find((j) => j.url === draft.url)) || null;
+        if (!job) {
+          job = await env.DB.prepare(
+            `INSERT INTO jobs (company, role, location, url, aliases, status, notes, applied_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(url) DO UPDATE SET updated_at = jobs.updated_at
+             RETURNING *`,
+          ).bind(
+            draft.company, draft.role, draft.location, draft.url, draft.aliases.join(',') || null, STATUS_FOR[category],
+            `Added automatically from an email: "${String(m.subject || '').slice(0, 150)}"`, m.received_at, now(),
+          ).first();
+          created = !jobs.some((j) => j.id === job.id);
+          if (created) jobs.push(job);
+        }
+      }
+    }
 
     const email = { ...from, gmail_id: String(m.gmail_id), thread_id: m.thread_id ? String(m.thread_id) : null, subject: m.subject || null, link };
 
@@ -369,10 +452,15 @@ async function ingest(env, request) {
     ).first();
     if (!row) continue; // raced with another ingest
 
-    if (job) await advance(env, job, category, row.id);
+    if (created) {
+      await env.DB.prepare('INSERT INTO events (job_id, status, email_id, created_at) VALUES (?, ?, ?, ?)')
+        .bind(job.id, job.status, row.id, now()).run();
+    } else if (job) {
+      await advance(env, job, category, row.id);
+    }
 
     const rescue = inSpam && ((!!job && !!STATUS_FOR[category]) || (!!platform && NOTIFY_CATEGORIES.has(category)));
-    results.push({ gmail_id: email.gmail_id, thread_id: email.thread_id, category, company: job?.company ?? null, notified, rescue });
+    results.push({ gmail_id: email.gmail_id, thread_id: email.thread_id, category, company: job?.company ?? null, created_job: created, notified, rescue });
   }
 
   return json({ results, skipped: messages.length - fresh.length });
@@ -399,6 +487,7 @@ async function route(request, env) {
   const emailMatch = pathname.match(/^\/api\/emails\/(\d+)$/);
   if (emailMatch && method === 'PATCH') return patchEmail(env, request, Number(emailMatch[1]));
   if (pathname === '/api/ingest' && method === 'POST') return ingest(env, request);
+  if (pathname === '/api/known' && method === 'POST') return knownIds(env, request);
 
   throw new HttpError(404, 'Not found');
 }
