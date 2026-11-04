@@ -6,7 +6,7 @@ My personal job-application tracker.
 - **Applications I never saved still show up**: a "thanks for applying" email (or an OA, interview or rejection) that matches no saved job creates the job automatically.
 - **Cloudflare Worker + D1** stores jobs, recruiting emails and a status history.
 - **Google Apps Script** reads Gmail every 5 minutes on Google's servers (Spam folder included) and posts new mail to the Worker. It has **read-only** Gmail access and keeps working when my laptop is off.
-- The Worker **classifies emails with plain rules** (no LLMs, no AI APIs), links each one to a saved job, moves the job's status forward, and **pushes a notification to my phone** through a Telegram bot (or [ntfy](https://ntfy.sh)) for online assessments, interviews and offers.
+- The Worker **classifies emails with plain rules** (no LLMs, no AI APIs), links each one to a saved job, moves the job's status forward, and **pushes a notification to my phone** through [ntfy](https://ntfy.sh) (or a Telegram bot) for online assessments, interviews and offers.
 
 Plain JavaScript, no frameworks, no build step, free tiers only.
 
@@ -23,7 +23,7 @@ Plain JavaScript, no frameworks, no build step, free tiers only.
   ┌────────────────────────┐   POST /api/ingest            │ SQL      │ POST JSON
   │ Google Apps Script     │   batches of 10 messages      ▼          ▼
   │  every 5 min, on       │ ─────────────────────▶ ┌───────────┐ ┌──────────┐
-  │  Google's servers      │                        │ D1 SQLite │ │ Telegram │
+  │  Google's servers      │                        │ D1 SQLite │ │ ntfy.sh  │
   │  reads Inbox + Spam    │ ◀── results ────────── │ jobs      │ └────┬─────┘
   │  (gmail.readonly)      │                        │ emails    │      │ push
   │                        │                        │ events    │      ▼
@@ -45,7 +45,7 @@ apps-script/  Code.gs + appsscript.json: paste into a Google Apps Script project
 
 ## Setup
 
-You need Node 18+, a free Cloudflare account, a Google account, Chrome, and Telegram on your phone.
+You need Node 18+, a free Cloudflare account, a Google account, Chrome, and the ntfy app on your phone.
 
 ### 1. Deploy the Worker
 
@@ -73,26 +73,21 @@ Check that it's up (should print `[]`):
 curl -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/jobs
 ```
 
-### 2. Phone notifications (Telegram)
+### 2. Phone notifications (ntfy)
 
-Notifications come from your own Telegram bot. It's free, and its limits are per bot rather than per IP address. (ntfy.sh's free tier limits by IP, and Cloudflare Workers share IPs, so it quickly runs into "daily message quota reached".)
+Install **ntfy** ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iOS](https://apps.apple.com/app/ntfy/id1625396347)). No account is needed.
 
-1. In Telegram, open **@BotFather**, send `/newbot`, and pick a name and a username ending in `bot`. BotFather replies with a token like `123456:ABC-...`.
-2. Store it: `npx wrangler secret put TELEGRAM_BOT_TOKEN`
-3. Open your new bot in Telegram, press **Start**, and send it any message (bots can only message people who wrote to them first).
-4. Get your chat id; the Worker looks it up for you:
-   ```sh
-   curl -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/telegram-chats
-   ```
-5. Store it: `npx wrangler secret put TELEGRAM_CHAT_ID` (paste the `chat_id` number).
-6. Test it (should buzz your phone):
-   ```sh
-   curl -X POST -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/notify-test
-   ```
+```sh
+# Anyone who knows the topic can read your notifications, so make it unguessable
+echo "callback-$(openssl rand -hex 12)"   # copy the output
+npx wrangler secret put NTFY_TOPIC
+```
 
-Secrets take effect immediately; no redeploy needed. Anyone with the bot token can send messages as your bot, so keep it private.
+In the app, tap **+** and subscribe to that exact topic on the default server `ntfy.sh`.
 
-**Using ntfy instead:** leave the Telegram secrets unset and set `NTFY_TOPIC` (an unguessable topic), then subscribe to it in the ntfy app. On ntfy.sh's free tier this can fail with a 429 because of the shared-IP limit above; a paid ntfy.sh plan or a self-hosted ntfy server (set `NTFY_URL` in `wrangler.toml`, and `NTFY_TOKEN` if it needs auth) avoids that.
+ntfy.sh's free tier limits messages per IP address, and Cloudflare Workers share IP addresses with many other users, so the Worker often gets `429 daily message quota reached`. When that happens, the Worker hands the finished notification back to the Apps Script, which sends it from Google's servers (different IPs). Nothing to configure. After step 3, run `testNotification()` in the Apps Script editor to check the whole path; its log says which way the test went.
+
+**Telegram instead (optional):** create a bot with **@BotFather** (`/newbot`), `npx wrangler secret put TELEGRAM_BOT_TOKEN`, send your bot a message, read your chat id from `GET /api/telegram-chats`, then `npx wrangler secret put TELEGRAM_CHAT_ID`. When both are set, the Worker uses Telegram instead of ntfy. Telegram's limits are per bot, so the IP problem doesn't apply.
 
 ### 3. Gmail sync (Apps Script)
 
@@ -186,13 +181,14 @@ Only `oa`, `interview` and `offer` emails trigger a push, only if they're less t
 
 Tapping the notification opens the thread in Gmail. If there's an assessment or scheduling link, the notification gets an **Open assessment** / **Open scheduler** button.
 
-In Telegram, alerts from unmatched company domains (priority 2, "Check ·") arrive silently; the rest make a sound.
+Unmatched company-domain alerts ("Check ·") use low priority: quiet in ntfy, silent in Telegram.
 
-**Not getting notifications?** `POST /api/notify-test` (see setup step 2) sends a test and returns the service's exact reply:
+**Not getting notifications?** Run `testNotification()` in the Apps Script editor, or `curl -X POST -H "Authorization: Bearer <API_TOKEN>" …/api/notify-test` for the Worker alone. Both report the service's exact reply:
 
-- `"problem": "No notification channel"`: the Telegram secrets (or `NTFY_TOPIC`) aren't set.
+- `"problem": "No notification channel"`: `NTFY_TOPIC` (or the Telegram secrets) isn't set.
+- ntfy `429` from the Worker: expected on the free tier; the Apps Script resends it. If the Apps Script log also shows 429, ntfy.sh is limiting Google's IPs too that day; a paid ntfy.sh plan or Telegram avoids it.
+- Sent, but nothing on the phone: the topic in the app doesn't match the secret. The test reply shows the first characters and the length of the topic.
 - Telegram `401`: wrong bot token. `400`/`403`: wrong chat id, or you haven't sent the bot a message yet.
-- ntfy `429`: ntfy.sh's shared-IP limit; switch to Telegram.
 
 `npx wrangler tail` shows the reply for every notification as it happens.
 
