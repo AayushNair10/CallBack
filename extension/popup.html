@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Callback</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="popup">
+  <header class="popup-header">
+    <h1>Callback</h1>
+    <a href="#" id="open-dashboard">Open dashboard</a>
+  </header>
+
+  <p id="warning" class="notice warn" hidden></p>
+  <p id="existing" class="notice info" hidden></p>
+
+  <form id="job-form" autocomplete="off">
+    <label>Company *
+      <input id="company" required>
+    </label>
+    <label>Role
+      <input id="role">
+    </label>
+    <label>Location
+      <input id="location">
+    </label>
+    <div class="row">
+      <label>Pay min
+        <input id="pay_min" type="number" min="0" step="any">
+      </label>
+      <label>Pay max
+        <input id="pay_max" type="number" min="0" step="any">
+      </label>
+      <label>Per
+        <select id="pay_unit">
+          <option value="YEAR">year</option>
+          <option value="HOUR">hour</option>
+          <option value="MONTH">month</option>
+          <option value="WEEK">week</option>
+        </select>
+      </label>
+    </div>
+    <label>Status
+      <select id="status"></select>
+    </label>
+    <label>Notes
+      <textarea id="notes" rows="2"></textarea>
+    </label>
+    <p id="url" class="muted small url"></p>
+    <button id="save" type="submit">Save</button>
+    <p id="message" class="small" role="status"></p>
+  </form>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

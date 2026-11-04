@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Callback",
+  "version": "1.0.0",
+  "description": "Save job postings in one click and track every application.",
+  "action": {
+    "default_title": "Save this job to Callback",
+    "default_popup": "popup.html"
+  },
+  "options_page": "dashboard.html",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://*.workers.dev/*"]
+}

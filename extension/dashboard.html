@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Callback · Applications</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="dashboard">
+  <header class="topbar">
+    <h1>Callback</h1>
+    <div class="actions">
+      <span id="last-sync" class="muted small"></span>
+      <button id="refresh" type="button" class="secondary">Refresh</button>
+      <button id="export" type="button" class="secondary">Export CSV</button>
+      <button id="toggle-settings" type="button" class="secondary">Settings</button>
+    </div>
+  </header>
+
+  <section id="settings" class="panel" hidden>
+    <h2>Settings</h2>
+    <form id="settings-form" class="settings-grid" autocomplete="off">
+      <label>Worker URL
+        <input id="worker-url" type="url" placeholder="https://callback.your-name.workers.dev" required>
+      </label>
+      <label>API token
+        <input id="api-token" type="password" placeholder="The API_TOKEN secret" required>
+      </label>
+      <button type="submit">Save &amp; test</button>
+    </form>
+    <p id="settings-message" class="small" role="status"></p>
+  </section>
+
+  <p id="error" class="notice error" hidden></p>
+
+  <section class="panel">
+    <div class="toolbar">
+      <div id="chips" class="chips"></div>
+      <input id="search" type="search" placeholder="Search company, role, location, notes…">
+    </div>
+    <div class="table-wrap">
+      <table id="jobs">
+        <thead>
+          <tr>
+            <th data-sort="company">Company</th>
+            <th data-sort="role">Role</th>
+            <th data-sort="location">Location</th>
+            <th data-sort="pay">Pay</th>
+            <th data-sort="status">Status</th>
+            <th data-sort="applied_at">Applied</th>
+            <th data-sort="updated_at">Updated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p id="jobs-empty" class="muted empty" hidden>No applications yet. Open a job posting and click the Callback icon to save one.</p>
+  </section>
+
+  <section class="panel">
+    <div class="toolbar">
+      <h2>Recruiting emails</h2>
+      <label class="inline small">
+        <input id="show-all" type="checkbox"> show alerts/newsletters/other
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table id="emails">
+        <thead>
+          <tr><th>Date</th><th>Category</th><th>From</th><th>Subject</th><th>Job</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p id="emails-empty" class="muted empty" hidden>No emails yet. They appear here after the Apps Script runs.</p>
+  </section>
+
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>
