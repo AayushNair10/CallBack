@@ -263,6 +263,7 @@ async function patchEmail(env, request, id) {
   const email = await env.DB.prepare('SELECT * FROM emails WHERE id = ?').bind(id).first();
   if (!email) throw new HttpError(404, 'Email not found');
 
+  const before = { category: email.category, job_id: email.job_id };
   const sets = [];
   const values = [];
   if ('category' in body) {
@@ -279,16 +280,36 @@ async function patchEmail(env, request, id) {
     email.job_id = jobId;
   }
 
-  if (sets.length) {
-    const job = email.job_id
-      ? await env.DB.prepare('SELECT * FROM jobs WHERE id = ?').bind(email.job_id).first()
-      : null;
-    if (email.job_id && !job) throw new HttpError(404, 'Job not found');
+  const changed = email.category !== before.category || email.job_id !== before.job_id;
+  if (sets.length && changed) {
+    if (email.job_id) {
+      const exists = await env.DB.prepare('SELECT id FROM jobs WHERE id = ?').bind(email.job_id).first();
+      if (!exists) throw new HttpError(404, 'Job not found');
+    }
     await env.DB.prepare(`UPDATE emails SET ${sets.join(', ')} WHERE id = ?`).bind(...values, id).run();
-    if (job) await advance(env, job, email.category, email.id);
+    // A correction undoes what this email did before, then applies the corrected version.
+    if (before.job_id) await undoEmail(env, before.job_id, email.id);
+    if (email.job_id) {
+      const job = await env.DB.prepare('SELECT * FROM jobs WHERE id = ?').bind(email.job_id).first();
+      await advance(env, job, email.category, email.id);
+    }
   }
 
   return json(await env.DB.prepare(`${EMAIL_SELECT} WHERE e.id = ?`).bind(id).first());
+}
+
+// If this email made the job's latest status change, put the job back to the status before it
+// (or "applied" if the email created the job). Later changes from other emails are kept.
+async function undoEmail(env, jobId, emailId) {
+  const { results } = await env.DB.prepare('SELECT status, email_id FROM events WHERE job_id = ? ORDER BY id DESC LIMIT 2').bind(jobId).all();
+  const [last, prev] = results;
+  if (!last || last.email_id !== emailId) return;
+  const status = prev?.status ?? 'applied';
+  const ts = now();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?').bind(status, ts, jobId),
+    env.DB.prepare('INSERT INTO events (job_id, status, email_id, created_at) VALUES (?, ?, NULL, ?)').bind(jobId, status, ts),
+  ]);
 }
 
 // ---------- ingest ----------
