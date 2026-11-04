@@ -1,7 +1,7 @@
 // Callback Worker: jobs API, email ingest, status tracking and ntfy notifications.
 
 import { classify, domainIn, FREE_MAIL, JOB_BOARD_DOMAINS, CATEGORIES } from './classify.js';
-import { aliasesFor, companyCore, matchJob, normalize } from './match.js';
+import { aliasesFor, matchJob, normalize, rolesAgree, sameCompany } from './match.js';
 import { jobFromEmail } from './autojob.js';
 
 const STATUSES = ['saved', 'applied', 'oa', 'interview', 'offer', 'rejected'];
@@ -183,12 +183,10 @@ const isBoardUrl = (url) => {
 // Same company and same role, where at least one side has no URL or only a job-board URL.
 // Two different employer-site URLs are treated as two separate postings.
 async function findSimilarJob(env, job) {
-  const key = (name) => companyCore(name).replace(/ /g, ''); // "Capitalone" == "Capital One"
-  const core = key(job.company);
   const role = normalize(job.role);
   const { results } = await env.DB.prepare('SELECT * FROM jobs').all();
   const candidates = results.filter((j) => {
-    if (key(j.company) !== core) return false;
+    if (!sameCompany(j.company, job.company)) return false;
     if (j.url && job.url && !isBoardUrl(j.url) && !isBoardUrl(job.url)) return false;
     return true;
   });
@@ -334,17 +332,43 @@ async function sendNtfy(env, { plan, category, job, email, inSpam }) {
   if (email.link) {
     payload.actions = [{ action: 'view', label: category === 'oa' ? 'Open assessment' : 'Open scheduler', url: email.link }];
   }
+  return (await postNtfy(env, payload)).ok;
+}
+
+// Returns {ok, status, detail} and logs failures (visible with `npx wrangler tail`).
+async function postNtfy(env, payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (env.NTFY_TOKEN) headers.Authorization = `Bearer ${env.NTFY_TOKEN}`;
   try {
-    const res = await fetch(env.NTFY_URL || 'https://ntfy.sh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    return res.ok;
+    const res = await fetch(env.NTFY_URL || 'https://ntfy.sh', { method: 'POST', headers, body: JSON.stringify(payload) });
+    const detail = (await res.text()).slice(0, 300);
+    if (!res.ok) console.error(`ntfy returned ${res.status}: ${detail}`);
+    return { ok: res.ok, status: res.status, detail };
   } catch (err) {
-    console.error('ntfy failed', err);
-    return false;
+    console.error('ntfy request failed', err);
+    return { ok: false, status: 0, detail: String(err) };
   }
+}
+
+// POST /api/notify-test: sends a test push and reports exactly what ntfy said.
+async function notifyTest(env) {
+  if (!env.NTFY_TOPIC) {
+    return json({ ok: false, problem: 'NTFY_TOPIC is not set on this Worker. Run: npx wrangler secret put NTFY_TOPIC' });
+  }
+  const res = await postNtfy(env, {
+    topic: env.NTFY_TOPIC,
+    title: 'Callback test',
+    message: 'If you can read this on your phone, notifications work.',
+    priority: 4,
+    tags: ['white_check_mark'],
+  });
+  return json({
+    ok: res.ok,
+    ntfy_status: res.status,
+    ntfy_response: res.detail,
+    topic_hint: `${env.NTFY_TOPIC.slice(0, 9)}… (${env.NTFY_TOPIC.length} characters), compare with the topic in the ntfy app`,
+    server: env.NTFY_URL || 'https://ntfy.sh',
+  });
 }
 
 // Lets the Apps Script skip downloading messages that are already stored.
@@ -408,27 +432,40 @@ async function ingest(env, request) {
     let job = NOISE.has(category)
       ? null
       : matchJob(jobs, { from_name: from.from_name, from_domain: from.from_domain, subject: m.subject, body: m.body });
+    const draft = NOISE.has(category) ? null : jobFromEmail({ ...from, subject: m.subject, body: m.body, in_spam: inSpam }, category);
+
+    // The email names a different role than the job it matched (e.g. you saved one Stripe role
+    // from jobright but applied to another on Stripe's site): use the job with that role, or
+    // treat it as a new application.
+    if (job && draft?.role && job.role && !rolesAgree(draft.role, job.role)) {
+      job = jobs.find((j) => j !== job && j.role && sameCompany(j.company, job.company) && rolesAgree(draft.role, j.role)) || null;
+    }
 
     // An application you never saved: create the job from the email.
     let created = false;
-    if (!job && !NOISE.has(category)) {
-      const draft = jobFromEmail({ ...from, subject: m.subject, body: m.body, in_spam: inSpam }, category);
-      if (draft) {
-        job = (draft.url && jobs.find((j) => j.url === draft.url)) || null;
-        if (!job) {
-          job = await env.DB.prepare(
-            `INSERT INTO jobs (company, role, location, url, aliases, status, notes, applied_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(url) DO UPDATE SET updated_at = jobs.updated_at
-             RETURNING *`,
-          ).bind(
-            draft.company, draft.role, draft.location, draft.url, draft.aliases.join(',') || null, STATUS_FOR[category],
-            `Added automatically from an email: "${String(m.subject || '').slice(0, 150)}"`, m.received_at, now(),
-          ).first();
-          created = !jobs.some((j) => j.id === job.id);
-          if (created) jobs.push(job);
-        }
+    if (!job && draft) {
+      // Same posting link, or same company with the same role (or a role missing on either side).
+      job = (draft.url && jobs.find((j) => j.url === draft.url))
+        || jobs.find((j) => sameCompany(j.company, draft.company) && (!draft.role || !j.role || rolesAgree(draft.role, j.role)))
+        || null;
+      if (!job) {
+        job = await env.DB.prepare(
+          `INSERT INTO jobs (company, role, location, url, aliases, status, notes, applied_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(url) DO UPDATE SET updated_at = jobs.updated_at
+           RETURNING *`,
+        ).bind(
+          draft.company, draft.role, draft.location, draft.url, draft.aliases.join(',') || null, STATUS_FOR[category],
+          `Added automatically from an email: "${String(m.subject || '').slice(0, 150)}"`, m.received_at, now(),
+        ).first();
+        created = !jobs.some((j) => j.id === job.id);
+        if (created) jobs.push(job);
       }
+    }
+    // A later email names the role an earlier one didn't.
+    if (job && !created && !job.role && draft?.role && sameCompany(job.company, draft.company)) {
+      await env.DB.prepare('UPDATE jobs SET role = ? WHERE id = ? AND role IS NULL').bind(draft.role, job.id).run();
+      job.role = draft.role;
     }
 
     const email = { ...from, gmail_id: String(m.gmail_id), thread_id: m.thread_id ? String(m.thread_id) : null, subject: m.subject || null, link };
@@ -488,6 +525,7 @@ async function route(request, env) {
   if (emailMatch && method === 'PATCH') return patchEmail(env, request, Number(emailMatch[1]));
   if (pathname === '/api/ingest' && method === 'POST') return ingest(env, request);
   if (pathname === '/api/known' && method === 'POST') return knownIds(env, request);
+  if (pathname === '/api/notify-test' && method === 'POST') return notifyTest(env);
 
   throw new HttpError(404, 'Not found');
 }
