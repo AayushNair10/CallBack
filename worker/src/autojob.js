@@ -18,8 +18,8 @@ const GENERIC_NAMES = new Set([
 ]);
 const BAD_COMPANY = /^(?:a|an|the|our|your|this|that|us|you|we|it|position|role|job|team|opportunity|software|engineer|intern|company|organization|hiring|recruiting|careers?)$/i;
 
-// A role must look like a job title...
-const TITLE_WORD = /\b(?:engineer(?:ing)?|developer|scientist|science|analyst|analytics|intern(?:ship)?|co-?op|designer|design|manager|management|programmer|architect|specialist|associate|consultant|researcher|research|sde|swe|sre|devops|qa|tester|fellow(?:ship)?|technician|administrator|admin|lead|director|coordinator|representative|officer|accountant|strategist|writer|recruiter|advisor|product|software|data|machine learning|ml|ai|security|graduate|new grad|trainee|apprentice|technologist|operations|support|sales|marketing|finance|quant|trader)\b/i;
+// A role must contain a job-title word ("Data" or "AI" alone isn't enough)...
+const TITLE_WORD = /\b(?:engineer(?:ing)?|developer|scientist|analyst|intern(?:ship)?|co-?op|designer|manager|programmer|architect|specialist|associate|consultant|researcher|sde|swe|sre|devops|qa|tester|fellow(?:ship)?|technician|administrator|lead|director|coordinator|representative|officer|accountant|strategist|writer|recruiter|advisor|graduate|new grad|trainee|apprentice|technologist|quant|trader)\b/i;
 // ...and not like a sentence.
 const NOT_TITLE = /\b(?:you|your|we|our|us|let|know|information|visit|proceed|determine|alignment|candidacy|thank|thanks|time|effort|submitted|successfully|received|reviewing|review|please|regret|unfortunately|decided|selected|interest|considering|consideration|following|current|this|that|these|which|will|would|could|should)\b/i;
 
@@ -50,13 +50,14 @@ export function cleanRole(s, company) {
   if (lead) r = r.slice(lead.index + lead[0].length);
   r = r
     .replace(/^[^A-Za-z0-9]+/, '') // "* Backend Developer"
+    .replace(/^(?:R|JR|REQ)-?\d{4,}\s*[-–—:]?\s*/i, '') // "JR2020271 Senior Systems Software Engineer"
     .replace(/\s+(?:job|position|role|opening|opportunity|posting)?\s*(?:was|has been|have been|is|at|with|here|and we|we|that|which|on|via)\b.*$/i, '')
     .replace(/\s+(?:job|position|role|opening|opportunity|posting)$/i, '')
     .replace(/\s*(?:[-–—#:]\s*|\(\s*)(?:req(?:uisition)?\.?\s*(?:id)?:?\s*)?(?:R|JR|REQ)?-?\d{5,}\)?\s*$|\s+\(?(?:R|JR|REQ)-?\d{4,}\)?\s*$/i, '') // trailing req ids, not years
     .replace(/[\s,.!:;'(-]+$/, '');
   if (r.length < 3 || r.length > 90 || r.split(' ').length > 12) return null;
   if (!TITLE_WORD.test(r) || NOT_TITLE.test(r) || /https?:|@/.test(r)) return null;
-  if (company && compact(r) === compact(company)) return null;
+  if (company && compact(r).startsWith(compact(company)) && !TITLE_WORD.test(r.slice(company.length))) return null;
   return r;
 }
 
@@ -70,6 +71,7 @@ export function companyFromSender(name) {
     if (SENDER_NOISE.test(split)) n = split;
     SENDER_NOISE.lastIndex = 0;
   }
+  if (/^[^\s@]+@[^\s@]+$/.test(n)) n = n.split('@')[1]; // "noreply@questdiagnostics.com"
   const at = n.match(/\s(?:at|@|from)\s+(.+)$/i); // "Jane at Stripe"
   if (at) n = at[1];
   n = n.split(/\s+(?:via|through)\s+/i)[0]; // "Stripe via Greenhouse"

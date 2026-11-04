@@ -124,6 +124,12 @@ test('cleanRole keeps job titles and rejects sentence fragments (real inbox case
     ['Software Engineer, New Grad (Dec 2026)', 'Software Engineer, New Grad (Dec 2026)'],
     ['Software Engineer - New Grad 2026', 'Software Engineer - New Grad 2026'],
     ['Data Analyst R123456', 'Data Analyst'],
+    ['JR2020271 Senior Systems Software Engineer – GPU Software', 'Senior Systems Software Engineer – GPU Software'],
+    ['2026 Global Technology - Associate Software Engineer', '2026 Global Technology - Associate Software Engineer'],
+    ['Engineering Trainee', 'Engineering Trainee'],
+    ['Software Engineering, New Grad', 'Software Engineering, New Grad'],
+    ['Data', null],
+    ['AI Platform', null],
     ['more information and support on the recruitment stages visit: Graduate and', null],
     ['proceed with your candidacy for the current', null],
     ['let you know that you were not selected for the', null],
@@ -158,4 +164,11 @@ test('real-inbox company cases', () => {
   job = jobFromEmail({ from_name: 'Careers @ .questdiagnostics.com', from_addr: 'careers@questdiagnostics.com', from_domain: 'questdiagnostics.com',
     subject: 'Thank you for applying', body: 'We received your application.' }, 'application_received');
   assert.equal(job.company, 'Questdiagnostics');
+  job = jobFromEmail({ from_name: 'noreply@questdiagnostics.com', from_addr: 'noreply@questdiagnostics.com', from_domain: 'questdiagnostics.com',
+    subject: 'Thank you for applying', body: 'We received your application for LIMS/LIS Software Engineer.' }, 'application_received');
+  assert.equal(job.company, 'Questdiagnostics');
+  assert.equal(job.role, 'LIMS/LIS Software Engineer');
+  // The company name is not a role.
+  assert.equal(cleanRole('Abnormal AI', 'Abnormal'), null);
+  assert.equal(cleanRole('Abnormal AI Security Engineer', 'Abnormal'), 'Abnormal AI Security Engineer');
 });
