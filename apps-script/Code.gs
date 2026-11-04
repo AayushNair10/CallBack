@@ -150,7 +150,45 @@ function flush_(cfg, messages, notify, stats) {
   stats.sent += messages.length;
   (res.results || []).forEach(function (r) {
     if (r.rescue) stats.inSpam.push(r.company || r.category);
+    if (r.push) sendPush_(r.push);
   });
+}
+
+/**
+ * Sends a phone notification the Worker couldn't deliver itself. ntfy.sh's free tier limits
+ * messages per IP, and Cloudflare Workers share IPs; Google's servers use different ones.
+ * Failures are logged, not thrown, so one missed alert doesn't stop the sync.
+ */
+function sendPush_(push) {
+  try {
+    var resp = UrlFetchApp.fetch(push.url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: push.headers || {},
+      payload: JSON.stringify(push.body),
+      muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    console.log('Callback: sent notification from Google (%s): %s', code, push.body.title);
+    if (code !== 200) console.log('Callback: ntfy said: %s', resp.getContentText().slice(0, 300));
+    return code === 200;
+  } catch (e) {
+    console.log('Callback: notification failed: %s', e.message);
+    return false;
+  }
+}
+
+/** Run from the editor to check that notifications reach your phone. */
+function testNotification() {
+  var res = post_(config_(), '/api/notify-test', {});
+  if (res.ok) {
+    console.log('Callback: the Worker delivered the test notification itself (%s).', res.channel);
+  } else if (res.push) {
+    console.log('Callback: the Worker was refused (%s), sending from Google instead...', res.status);
+    console.log(sendPush_(res.push) ? 'Callback: sent. Check your phone.' : 'Callback: Google could not send it either; see the line above.');
+  } else {
+    console.log('Callback: test failed: %s', JSON.stringify(res));
+  }
 }
 
 /** Asks the Worker which of these Gmail ids it already stored. */
