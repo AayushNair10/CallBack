@@ -316,59 +316,101 @@ function notificationPlan({ category, job, platform, domain, inSpam }) {
   return null;
 }
 
-async function sendNtfy(env, { plan, category, job, email, inSpam }) {
-  if (!env.NTFY_TOPIC) return false;
+// Builds the notification and sends it through Telegram if configured, otherwise ntfy.
+async function sendNotification(env, { plan, category, job, email, inSpam }) {
   const who = job
     ? [job.company, job.role].filter(Boolean).join(' – ')
     : email.from_name || email.from_domain || email.from_addr || 'unknown sender';
-  const payload = {
-    topic: env.NTFY_TOPIC,
+  const note = {
     title: `${plan.prefix}${LABELS[category]}: ${who}`,
     message: (email.subject || '(no subject)') + (inSpam ? '\n(Found in your Spam folder)' : ''),
     priority: plan.priority,
-    tags: [TAGS[category]],
+    tag: TAGS[category],
     click: `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(email.thread_id || '')}`,
+    link: email.link ? { label: category === 'oa' ? 'Open assessment' : 'Open scheduler', url: email.link } : null,
   };
-  if (email.link) {
-    payload.actions = [{ action: 'view', label: category === 'oa' ? 'Open assessment' : 'Open scheduler', url: email.link }];
-  }
-  return (await postNtfy(env, payload)).ok;
+  return (await deliver(env, note)).ok;
+}
+
+const telegramReady = (env) => !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID);
+
+async function deliver(env, note) {
+  if (telegramReady(env)) return postTelegram(env, note);
+  if (env.NTFY_TOPIC) return postNtfy(env, note);
+  return { ok: false, status: 0, detail: 'No notification channel configured' };
+}
+
+const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Telegram bot message with link buttons. Low-priority alerts arrive silently.
+async function postTelegram(env, note) {
+  const buttons = [];
+  if (note.link) buttons.push([{ text: note.link.label, url: note.link.url }]);
+  if (note.click) buttons.push([{ text: 'Open in Gmail', url: note.click }]);
+  const payload = {
+    chat_id: env.TELEGRAM_CHAT_ID,
+    text: `<b>${escapeHtml(note.title)}</b>\n${escapeHtml(note.message)}`,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+    disable_notification: note.priority <= 2,
+  };
+  if (buttons.length) payload.reply_markup = { inline_keyboard: buttons };
+  return postJson(`${env.TELEGRAM_API_URL || 'https://api.telegram.org'}/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, payload, {}, 'Telegram');
+}
+
+async function postNtfy(env, note) {
+  const payload = { topic: env.NTFY_TOPIC, title: note.title, message: note.message, priority: note.priority, tags: [note.tag] };
+  if (note.click) payload.click = note.click;
+  if (note.link) payload.actions = [{ action: 'view', label: note.link.label, url: note.link.url }];
+  const headers = env.NTFY_TOKEN ? { Authorization: `Bearer ${env.NTFY_TOKEN}` } : {};
+  return postJson(env.NTFY_URL || 'https://ntfy.sh', payload, headers, 'ntfy');
 }
 
 // Returns {ok, status, detail} and logs failures (visible with `npx wrangler tail`).
-async function postNtfy(env, payload) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (env.NTFY_TOKEN) headers.Authorization = `Bearer ${env.NTFY_TOKEN}`;
+async function postJson(url, payload, headers, name) {
   try {
-    const res = await fetch(env.NTFY_URL || 'https://ntfy.sh', { method: 'POST', headers, body: JSON.stringify(payload) });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(payload) });
     const detail = (await res.text()).slice(0, 300);
-    if (!res.ok) console.error(`ntfy returned ${res.status}: ${detail}`);
+    if (!res.ok) console.error(`${name} returned ${res.status}: ${detail}`);
     return { ok: res.ok, status: res.status, detail };
   } catch (err) {
-    console.error('ntfy request failed', err);
+    console.error(`${name} request failed`, err);
     return { ok: false, status: 0, detail: String(err) };
   }
 }
 
-// POST /api/notify-test: sends a test push and reports exactly what ntfy said.
+// POST /api/notify-test: sends a test notification and reports exactly what the service said.
 async function notifyTest(env) {
-  if (!env.NTFY_TOPIC) {
-    return json({ ok: false, problem: 'NTFY_TOPIC is not set on this Worker. Run: npx wrangler secret put NTFY_TOPIC' });
+  const channel = telegramReady(env) ? 'telegram' : env.NTFY_TOPIC ? 'ntfy' : null;
+  if (!channel) {
+    return json({ ok: false, problem: 'No notification channel. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (or NTFY_TOPIC) with `npx wrangler secret put`.' });
   }
-  const res = await postNtfy(env, {
-    topic: env.NTFY_TOPIC,
+  const res = await deliver(env, {
     title: 'Callback test',
     message: 'If you can read this on your phone, notifications work.',
     priority: 4,
-    tags: ['white_check_mark'],
+    tag: 'white_check_mark',
+    click: null,
+    link: null,
   });
-  return json({
-    ok: res.ok,
-    ntfy_status: res.status,
-    ntfy_response: res.detail,
-    topic_hint: `${env.NTFY_TOPIC.slice(0, 9)}… (${env.NTFY_TOPIC.length} characters), compare with the topic in the ntfy app`,
-    server: env.NTFY_URL || 'https://ntfy.sh',
-  });
+  const out = { ok: res.ok, channel, status: res.status, response: res.detail };
+  if (channel === 'ntfy') out.topic_hint = `${env.NTFY_TOPIC.slice(0, 9)}… (${env.NTFY_TOPIC.length} characters)`;
+  if (channel === 'telegram' && !res.ok) out.hint = 'Check the bot token, and that you sent your bot a message first so it is allowed to message you.';
+  return json(out);
+}
+
+// GET /api/telegram-chats: after you message your bot, lists the chat ids it can see.
+async function telegramChats(env) {
+  if (!env.TELEGRAM_BOT_TOKEN) return json({ ok: false, problem: 'Set TELEGRAM_BOT_TOKEN first: npx wrangler secret put TELEGRAM_BOT_TOKEN' });
+  const res = await fetch(`${env.TELEGRAM_API_URL || 'https://api.telegram.org'}/bot${env.TELEGRAM_BOT_TOKEN}/getUpdates`);
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) return json({ ok: false, status: res.status, response: data });
+  const chats = new Map();
+  for (const u of data.result || []) {
+    const chat = (u.message || u.edited_message || u.channel_post || u.my_chat_member)?.chat;
+    if (chat) chats.set(chat.id, { chat_id: chat.id, name: [chat.first_name, chat.last_name, chat.title, chat.username].filter(Boolean).join(' ') });
+  }
+  return json({ ok: true, chats: [...chats.values()], next: chats.size ? 'Run: npx wrangler secret put TELEGRAM_CHAT_ID  (paste the chat_id)' : 'No messages yet. Open your bot in Telegram, press Start, send "hi", then try again.' });
 }
 
 // Lets the Apps Script skip downloading messages that are already stored.
@@ -475,7 +517,7 @@ async function ingest(env, request) {
     const plan = notificationPlan({ category, job, platform, domain: from.from_domain, inSpam });
     const fresh24h = Date.now() - new Date(m.received_at).getTime() < DAY_MS;
     if (plan && notify && fresh24h && !(email.thread_id && notifiedThreads.has(email.thread_id))) {
-      notified = await sendNtfy(env, { plan, category, job, email, inSpam });
+      notified = await sendNotification(env, { plan, category, job, email, inSpam });
       if (notified && email.thread_id) notifiedThreads.add(email.thread_id);
     }
 
@@ -526,6 +568,7 @@ async function route(request, env) {
   if (pathname === '/api/ingest' && method === 'POST') return ingest(env, request);
   if (pathname === '/api/known' && method === 'POST') return knownIds(env, request);
   if (pathname === '/api/notify-test' && method === 'POST') return notifyTest(env);
+  if (pathname === '/api/telegram-chats' && method === 'GET') return telegramChats(env);
 
   throw new HttpError(404, 'Not found');
 }
