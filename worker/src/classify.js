@@ -31,6 +31,14 @@ export const FREE_MAIL = [
   'proton.me', 'protonmail.com', 'yandex.com', 'mail.com', 'gmx.com', 'zoho.com',
 ];
 
+// Interview-prep and learning sites: their mail talks about "coding challenges" and big-company
+// interview questions, but it's always marketing.
+export const PRACTICE_DOMAINS = [
+  'leetcode.com', 'neetcode.io', 'algoexpert.io', 'educative.io', 'geeksforgeeks.org', 'interviewcake.com',
+  'codecademy.com', 'datacamp.com', 'coursera.org', 'udemy.com', 'udacity.com', 'edx.org', 'brilliant.org',
+  'designgurus.io', 'bytebytego.com', 'exponent.com', 'tryexponent.com', 'medium.com', 'substack.com',
+];
+
 export const CATEGORIES = [
   'application_received', 'oa', 'interview', 'offer', 'rejection',
   'recruiter_outreach', 'job_alert', 'newsletter', 'scam', 'other',
@@ -176,6 +184,9 @@ function categorize({ domain, subject, text, listUnsub, platform }) {
 
   const rejection = anyOf(REJECTION, text);
   const receivedSubject = anyOf(RECEIVED, subject);
+
+  // Practice and learning sites only send marketing.
+  if (domainIn(domain, PRACTICE_DOMAINS)) return 'newsletter';
 
   // 2. Job boards only ever send confirmations, rejections or alerts.
   if (domainIn(domain, JOB_BOARD_DOMAINS)) {

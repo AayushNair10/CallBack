@@ -266,3 +266,7 @@ test('short forms only match in the sender name or subject; namedBySender', () =
   assert.equal(namedBySender(clear, { from_name: 'CLEAR Talent', from_domain: 'greenhouse-mail.io', subject: 'Update' }), true);
   assert.equal(namedBySender({ company: 'IBM', aliases: 'ibm' }, { from_name: 'Talent', from_domain: 'ibm.com', subject: 'x' }), true);
 });
+
+test('LeetCode digests are newsletters even without List-Unsubscribe', () => {
+  assert.equal(cat({ from_domain: 'leetcode.com', subject: 'LeetCode Weekly Digest', body: 'This week: top coding challenge questions asked in Microsoft and Adobe online assessments.' }), 'newsletter');
+});
