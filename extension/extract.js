@@ -15,7 +15,7 @@ export function extractJob(doc, pageUrl) {
   }
 
   const KEEP_PARAMS = ['gh_jid', 'jk', 'jobid', 'job_id', 'id', 'jobreqid', 'for', 'token'];
-  const ATS_NAMES = /greenhouse|lever|workday|ashby|smartrecruiters|workable|icims|jobvite|linkedin|indeed|glassdoor|taleo|successfactors/i;
+  const ATS_NAMES = /greenhouse|lever|workday|ashby|smartrecruiters|workable|icims|jobvite|linkedin|indeed|glassdoor|taleo|successfactors|jobright/i;
 
   const clean = (s) => (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
   const decode = (s) => {
@@ -230,12 +230,33 @@ export function extractJob(doc, pageUrl) {
     if (job.role && job.source === 'generic') job.source = 'linkedin';
   }
 
+  // jobright pages without structured data (often closed postings) still name the job in
+  // their title ("Software Engineer @ Google | Jobright.ai") and page data.
+  if (/(^|\.)jobright\.ai$/i.test(hostname) && (!job.company || !job.role)) {
+    const titled = [...doc.querySelectorAll('meta[property="og:title"], meta[name="twitter:title"]')]
+      .map((m) => clean(m.getAttribute('content')).match(/^(.+?)\s+@\s+(.+?)\s*\|\s*jobright/i))
+      .find(Boolean);
+    const data = doc.getElementById('__NEXT_DATA__')?.textContent || '';
+    const field = (name) => {
+      const m = data.match(new RegExp(`"${name}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+      try {
+        return m ? clean(JSON.parse(`"${m[1]}"`)) : '';
+      } catch {
+        return '';
+      }
+    };
+    job.role ||= (titled && titled[1]) || field('jobTitle');
+    job.company ||= (titled && titled[2]) || field('companyName');
+    job.location ||= field('jobLocation');
+  }
+
   // 4. Generic fallbacks.
   job.role ||= firstText(['h1']) || meta('meta[property="og:title"]');
   if (!job.company) {
     const site = meta('meta[property="og:site_name"]');
     const slug = atsSlug(href);
-    job.company = site && !ATS_NAMES.test(site) ? site : slug ? titleCase(decodeURIComponent(slug)) : site;
+    // Never use a job board's or ATS's own name as the company.
+    job.company = site && !ATS_NAMES.test(site) ? site : slug ? titleCase(decodeURIComponent(slug)) : '';
   }
 
   if (!job.pay_min && !job.pay_max) {
