@@ -146,6 +146,8 @@ The dashboard hides `job_alert`, `newsletter` and `other` by default; tick **sho
 
 The same job arriving from several sources becomes one row. Saving checks for a job at the same company with the same role, and updates it instead of adding a duplicate, unless both have different employer-site URLs (those are separate postings, such as two "SDE I" openings). A merged row keeps the employer-site URL over a LinkedIn/jobright one, and keeps its status.
 
+Emails are matched by role as well as company. If a confirmation names a different role than the job it would match (you saved "Stripe – Data Scientist" from jobright, then applied to "Stripe – Backend Engineer" on Stripe's site), it goes to the job with that role, or becomes a new **applied** job. A later email that names the role fills it in on a job that didn't have one.
+
 Auto-created jobs say "Added automatically from an email" in their notes. Their details come from parsing the email text, so check them in the dashboard; an odd email can occasionally produce a wrong company or role.
 
 ### Status tracking
@@ -170,6 +172,16 @@ Only `oa`, `interview` and `offer` emails trigger a push, only if they're less t
 | Free-mail sender, or an unknown sender found in Spam | none | |
 
 Tapping the notification opens the thread in Gmail. If there's an assessment or scheduling link, the notification gets an **Open assessment** / **Open scheduler** button.
+
+**Not getting notifications?** Ask the Worker to send a test and report what ntfy answered:
+
+```sh
+curl -X POST -H "Authorization: Bearer <API_TOKEN>" https://callback.<your-subdomain>.workers.dev/api/notify-test
+```
+
+- `"problem": "NTFY_TOPIC is not set"`: run `npx wrangler secret put NTFY_TOPIC`.
+- `"ok": true` but nothing on the phone: the topic in the app doesn't match. Compare it with `topic_hint`, or set the secret again and resubscribe.
+- `ntfy_status` 429 or similar: ntfy.sh is rate-limiting the shared Cloudflare network. Create a free ntfy.sh account, make an access token, and store it with `npx wrangler secret put NTFY_TOKEN`; the Worker then sends as you. `npx wrangler tail` shows ntfy's reply for every notification.
 
 ### Spam
 
@@ -228,6 +240,7 @@ All routes need `Authorization: Bearer <API_TOKEN>`.
 | PATCH | `/api/emails/:id` | `{category?, job_id?}`; linking advances the job |
 | POST | `/api/ingest` | Used by the Apps Script; creates jobs for unmatched application emails |
 | POST | `/api/known` | `{ids}` → which Gmail ids are already stored (lets the Apps Script skip them) |
+| POST | `/api/notify-test` | Sends a test push and returns ntfy's response |
 
 ### Free-tier budget
 
