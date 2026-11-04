@@ -150,7 +150,9 @@ export function extractJob() {
   // 5. Pay range in the visible text.
   function payFromText(text) {
     const N = '(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?)\\s*([kK])?';
-    const re = new RegExp(`\\$\\s*${N}\\s*(?:-|–|—|to)\\s*(?:USD\\s*)?\\$?\\s*${N}`, 'g');
+    // Optional unit right after the first number, as in LinkedIn's "$150K/yr - $200K/yr".
+    const U = '(?:\\s*(?:\\/|per\\s+|an?\\s+)\\s*(hour|hr|year|yr|month|mo|week|wk)\\b)?';
+    const re = new RegExp(`\\$\\s*${N}${U}\\s*(?:-|–|—|to)\\s*(?:USD\\s*)?\\$?\\s*${N}`, 'g');
     const unitIn = (s) => {
       s = s.toLowerCase();
       if (/\bhour\b|\bhourly\b|\/\s*hr\b|\bhr\b/.test(s)) return 'HOUR';
@@ -165,10 +167,10 @@ export function extractJob() {
     let guessed = null;
     for (const m of text.matchAll(re)) {
       let min = Number(m[1].replace(/,/g, '')) * (m[2] ? 1000 : 1);
-      const max = Number(m[3].replace(/,/g, '')) * (m[4] ? 1000 : 1);
-      if (m[4] && !m[2] && min < 1000) min *= 1000; // "$125 - $160K"
+      const max = Number(m[4].replace(/,/g, '')) * (m[5] ? 1000 : 1);
+      if (m[5] && !m[2] && min < 1000) min *= 1000; // "$125 - $160K"
       const end = m.index + m[0].length;
-      const stated = unitIn(text.slice(end, end + 25));
+      const stated = (m[3] && unitIn(`/${m[3]}`)) || unitIn(text.slice(end, end + 25));
       const unit = stated || (max < 500 ? 'HOUR' : 'YEAR');
       const [lo, hi] = RANGES[unit];
       if (!(min <= max && min >= lo && max <= hi)) continue;
