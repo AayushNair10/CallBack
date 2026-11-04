@@ -141,7 +141,7 @@ Each email gets exactly one category. The first matching rule wins:
 | 5 | "came across your profile", "exciting opportunity", … unless it mentions *your application* | `recruiter_outreach` |
 | 6 | "offer letter", "extend you an offer", … | `offer` |
 | 7 | OA platform invite, or "online assessment", "coding challenge", "take-home", … | `oa` |
-| 8 | Scheduling platform (Calendly, GoodTime, …), or "phone screen", "virtual onsite", "share your availability", … | `interview` |
+| 8 | Scheduling platform (Calendly, GoodTime, Gem, …) talking about scheduling (pick a time, invitation, event…), or "phone screen", "virtual onsite", "share your availability", … | `interview` |
 | 9 | "thank you for applying", "application received", … | `application_received` |
 | 10 | Everything else | `other` |
 
@@ -166,6 +166,8 @@ Auto-created jobs say "Added automatically from an email" in their notes. Their 
 ### Status tracking
 
 Matched emails move the job forward only: `saved → applied → oa → interview → offer`. A rejection always applies. Every change, automatic or manual, is appended to the `events` table with the email that caused it.
+
+If you correct an email in the dashboard (its category, or which job it belongs to), whatever that email did to a job's status is undone and the corrected version is applied. A newer email's change is kept: correcting an old OA email doesn't undo a later interview.
 
 ### Aliases
 
