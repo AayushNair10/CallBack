@@ -91,4 +91,54 @@
     const control = applyControl(e.target);
     if (control) onApplyClick(control);
   }, true);
+
+  // On your jobright "Applied" page, copy each listed job into Callback. This fills in the
+  // role, location and pay on jobs that were created from emails. Each job is synced once.
+  const SYNCED_KEY = 'jobrightSynced';
+  let syncing = false;
+  let warned = false;
+
+  async function syncApplied() {
+    if (syncing || !location.pathname.startsWith('/jobs/applied')) return;
+    const ids = [...new Set([...document.querySelectorAll('a[href*="/jobs/info/"]')]
+      .map((a) => a.getAttribute('href').match(JOB_ID)?.[1])
+      .filter(Boolean))];
+    const { [SYNCED_KEY]: synced = [] } = await chrome.storage.local.get(SYNCED_KEY);
+    const todo = ids.filter((id) => !synced.includes(id));
+    if (!todo.length) return;
+
+    syncing = true;
+    let saved = 0;
+    try {
+      for (const id of todo) {
+        const job = await readJob(id).catch(() => null);
+        if (!job) continue;
+        const res = await chrome.runtime.sendMessage({ type: 'callback:save-applied', job });
+        if (!res?.ok) {
+          toast(`Callback: ${res?.error || 'sync failed'}`, false);
+          break;
+        }
+        saved++;
+        synced.push(id);
+      }
+      await chrome.storage.local.set({ [SYNCED_KEY]: synced.slice(-3000) });
+      if (saved) toast(`✓ Synced ${saved} applied job${saved === 1 ? '' : 's'} from jobright to Callback`);
+    } finally {
+      syncing = false;
+    }
+  }
+
+  // jobright is a single-page app that loads the list (and more on scroll) after the page.
+  let timer = null;
+  new MutationObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(syncApplied, 1500);
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  syncApplied();
+  setTimeout(() => {
+    if (!warned && location.pathname.startsWith('/jobs/applied') && !document.querySelector('a[href*="/jobs/info/"]')) {
+      warned = true;
+      console.warn('Callback: no job links found on the jobright Applied page');
+    }
+  }, 10_000);
 })();
