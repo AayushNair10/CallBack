@@ -10,4 +10,4 @@ NTFY_URL = "https://ntfy.sh"
 [[d1_databases]]
 binding = "DB"
 database_name = "callback"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "84bf1514-f127-4e0e-86c0-9ad3d0f70017"
