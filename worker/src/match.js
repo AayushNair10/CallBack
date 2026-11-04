@@ -113,15 +113,23 @@ export function rolesAgree(a, b) {
   return shared === x.size || shared === y.size || shared / new Set([...x, ...y]).size > 0.5;
 }
 
-// Same company, allowing for spacing ("Capitalone" vs "Capital One") and short names
-// ("Cerebras" vs "Cerebras Systems").
+// Trailing words that don't change which company it is ("Cerebras Systems", "Scale AI").
+const COMPANY_EXTRA = new Set([
+  'systems', 'labs', 'ai', 'technologies', 'technology', 'software', 'solutions', 'com', 'inc', 'io', 'hq',
+  'group', 'holdings', 'security', 'robotics', 'networks', 'cloud', 'digital', 'global', 'international',
+  'america', 'americas', 'usa', 'us', 'services', 'corp', 'co', 'llc', 'ltd',
+]);
+
+// Same company, allowing for spacing ("Capitalone" vs "Capital One") and trailing words
+// ("Cerebras" vs "Cerebras Systems"), but not different names ("Square" vs "Squarespace").
 export function sameCompany(a, b) {
-  const x = companyCore(a).replace(/ /g, '');
-  const y = companyCore(b).replace(/ /g, '');
-  if (!x || !y) return false;
-  if (x === y) return true;
-  const [short, long] = x.length < y.length ? [x, y] : [y, x];
-  return short.length >= 5 && long.startsWith(short);
+  const key = (name) => {
+    const words = companyCore(name).split(' ').filter(Boolean);
+    while (words.length > 1 && COMPANY_EXTRA.has(words[words.length - 1])) words.pop();
+    return words.join('');
+  };
+  const x = key(a);
+  return !!x && x === key(b);
 }
 
 function roleWords(role) {

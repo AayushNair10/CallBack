@@ -218,6 +218,10 @@ test('sameCompany', () => {
   assert.ok(sameCompany('Cerebras', 'Cerebras Systems'));
   assert.ok(sameCompany('Mastercard', 'MasterCard Services'));
   assert.ok(!sameCompany('Meta', 'Metabase'));
+  assert.ok(!sameCompany('Square', 'Squarespace'));
+  assert.ok(!sameCompany('Intern Co 1', 'Intern Co 10'));
+  assert.ok(sameCompany('Questdiagnostics Com', 'Quest Diagnostics'));
+  assert.ok(sameCompany('Scale', 'Scale AI'));
   assert.ok(!sameCompany('Stripe', 'Figma'));
 });
 
