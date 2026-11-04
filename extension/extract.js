@@ -1,8 +1,19 @@
 // Runs inside the job-posting tab via chrome.scripting.executeScript({ func: extractJob }).
 // Chrome serializes the function source, so it MUST be self-contained: no imports and
 // no references to anything outside its own body.
+// With no arguments it reads the current page; the jobright content script also passes a
+// fetched document and its URL.
 
-export function extractJob() {
+export function extractJob(doc, pageUrl) {
+  doc = doc || document;
+  const href = pageUrl || location.href;
+  let hostname = '';
+  try {
+    hostname = new URL(href).hostname;
+  } catch {
+    // keep empty
+  }
+
   const KEEP_PARAMS = ['gh_jid', 'jk', 'jobid', 'job_id', 'id', 'jobreqid', 'for', 'token'];
   const ATS_NAMES = /greenhouse|lever|workday|ashby|smartrecruiters|workable|icims|jobvite|linkedin|indeed|glassdoor|taleo|successfactors/i;
 
@@ -16,10 +27,10 @@ export function extractJob() {
       return t;
     }
   };
-  const meta = (sel) => clean(document.querySelector(sel)?.getAttribute('content'));
+  const meta = (sel) => clean(doc.querySelector(sel)?.getAttribute('content'));
   const firstText = (selectors) => {
     for (const sel of selectors) {
-      const t = clean(document.querySelector(sel)?.textContent);
+      const t = clean(doc.querySelector(sel)?.textContent);
       if (t) return t;
     }
     return '';
@@ -87,7 +98,7 @@ export function extractJob() {
       if (types.includes('JobPosting')) found.push(node);
       if (node['@graph']) visit(node['@graph']);
     };
-    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+    for (const s of doc.querySelectorAll('script[type="application/ld+json"]')) {
       const raw = s.textContent || '';
       try {
         visit(JSON.parse(raw));
@@ -181,7 +192,7 @@ export function extractJob() {
     return guessed;
   }
 
-  const url = canonicalUrl(location.href);
+  const url = canonicalUrl(href);
   const job = { company: '', role: '', location: '', pay_min: null, pay_max: null, pay_unit: null, currency: null, url, source: 'generic' };
 
   const posting = findPosting();
@@ -195,7 +206,7 @@ export function extractJob() {
   }
 
   // 3. LinkedIn.
-  if (/(^|\.)linkedin\.com$/i.test(location.hostname)) {
+  if (/(^|\.)linkedin\.com$/i.test(hostname)) {
     job.role ||= firstText([
       '.job-details-jobs-unified-top-card__job-title h1',
       '.job-details-jobs-unified-top-card__job-title',
@@ -223,12 +234,12 @@ export function extractJob() {
   job.role ||= firstText(['h1']) || meta('meta[property="og:title"]');
   if (!job.company) {
     const site = meta('meta[property="og:site_name"]');
-    const slug = atsSlug(location.href);
+    const slug = atsSlug(href);
     job.company = site && !ATS_NAMES.test(site) ? site : slug ? titleCase(decodeURIComponent(slug)) : site;
   }
 
   if (!job.pay_min && !job.pay_max) {
-    const text = (document.body?.innerText || document.body?.textContent || '').slice(0, 200000);
+    const text = (doc.body?.innerText || doc.body?.textContent || '').slice(0, 200000);
     Object.assign(job, payFromText(text) || {});
   }
   job.currency ||= job.pay_min || job.pay_max ? 'USD' : null;

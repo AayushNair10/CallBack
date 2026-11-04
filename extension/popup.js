@@ -6,6 +6,7 @@ const FIELDS = ['company', 'role', 'location', 'pay_min', 'pay_max', 'pay_unit',
 
 let existing = null;
 let page = {};
+let statusTouched = false;
 
 function show(id, text) {
   $(id).textContent = text;
@@ -87,8 +88,11 @@ async function save(e) {
   setMessage('Saving…', 'muted');
   try {
     let job = await api('/api/jobs', { method: 'POST', body });
-    // The upsert never overwrites status, so apply a changed status explicitly.
-    if (job.status !== status) job = await api(`/api/jobs/${job.id}`, { method: 'PATCH', body: { status } });
+    // The upsert never overwrites status. Only push the dropdown's value if you changed it,
+    // so saving a job that email already moved to "interview" doesn't reset it.
+    if (!job.created && statusTouched && job.status !== status) {
+      job = await api(`/api/jobs/${job.id}`, { method: 'PATCH', body: { status } });
+    }
     existing = job;
     show('existing', `Saved (status ${job.status})`);
     $('save').textContent = 'Update';
@@ -101,4 +105,5 @@ async function save(e) {
 }
 
 $('job-form').addEventListener('submit', save);
+$('status').addEventListener('change', () => (statusTouched = true));
 init();
