@@ -136,6 +136,19 @@ function roleWords(role) {
   return [...new Set(normalize(role).split(' '))].filter((w) => w.length >= 2 && !ROLE_STOPWORDS.has(w));
 }
 
+// True when the sender name, subject or sender domain names the job's company, as opposed
+// to a mention somewhere in the body (a footer, "if it's clear…", a newsletter).
+export function namedBySender(job, email) {
+  const head = ` ${normalize([email.from_name, email.subject].join(' '))} `;
+  const domain = String(email.from_domain || '').toLowerCase();
+  const label = domain.split('.').slice(-2, -1)[0] || '';
+  return jobAliases(job).some((a) => {
+    const flat = a.replace(/ /g, '');
+    return head.includes(` ${a} `) || (shortName(a) && head.includes(` ${shortName(a)} `))
+      || (flat.length <= 3 ? label === flat : domain.includes(flat));
+  });
+}
+
 // Returns the best-matching job or null.
 export function matchJob(jobs, email) {
   const hay = ` ${normalize([email.from_name, email.subject, String(email.body || '').slice(0, 3000)].join(' '))} `;
@@ -152,7 +165,7 @@ export function matchJob(jobs, email) {
     let score = 0;
     const label = domain.split('.').slice(-2, -1)[0] || '';
     if (aliases.some((a) => (a.length <= 3 ? head : hay).includes(` ${a} `))) score += 10;
-    else if (aliases.some((a) => shortName(a) && hay.includes(` ${shortName(a)} `))) score += 5;
+    else if (aliases.some((a) => shortName(a) && head.includes(` ${shortName(a)} `))) score += 5;
     // Short names ("f5", "ibm") must equal the domain name; longer ones may be part of it.
     const inDomain = (a) => (a.length <= 3 ? label === a : domain.includes(a));
     if (domain && aliases.some((a) => inDomain(a.replace(/ /g, '')))) score += 20;

@@ -1,7 +1,7 @@
 // Callback Worker: jobs API, email ingest, status tracking and ntfy notifications.
 
 import { classify, domainIn, FREE_MAIL, JOB_BOARD_DOMAINS, CATEGORIES } from './classify.js';
-import { aliasesFor, matchJob, normalize, rolesAgree, sameCompany } from './match.js';
+import { aliasesFor, matchJob, namedBySender, normalize, rolesAgree, sameCompany } from './match.js';
 import { jobFromEmail } from './autojob.js';
 
 const STATUSES = ['saved', 'applied', 'oa', 'interview', 'offer', 'rejected'];
@@ -515,6 +515,11 @@ async function ingest(env, request) {
       ? matchJob(jobs, { from_name: from.from_name, from_domain: from.from_domain, subject: m.subject, body: m.body })
       : null;
     const draft = NOISE.has(category) ? null : jobFromEmail({ ...from, subject: m.subject, body: m.body, in_spam: inSpam }, category);
+
+    // Matched only through the body, but the sender/subject name another company (a Decagon
+    // confirmation that says "clear" isn't about CLEAR): trust the email.
+    const emailMeta = { from_name: from.from_name, from_domain: from.from_domain, subject: m.subject };
+    if (job && draft && !sameCompany(draft.company, job.company) && !namedBySender(job, emailMeta)) job = null;
 
     // The email names a different role than the job it matched (e.g. you saved one Stripe role
     // from jobright but applied to another on Stripe's site): use the job with that role, or

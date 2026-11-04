@@ -179,3 +179,21 @@ test('company names with dots ("ID.me") are kept whole', () => {
   assert.equal(job.company, 'ID.me');
   assert.deepEqual(job.aliases, ['id me']);
 });
+
+test('real-inbox cases from the second import', () => {
+  const run = (from_name, from_addr, subject, body, category = 'application_received') => {
+    const from_domain = from_addr.split('@')[1];
+    return jobFromEmail({ from_name, from_addr, from_domain, subject, body }, category)?.company ?? null;
+  };
+  // Sentence glued onto a name after &nbsp; decoding.
+  assert.notEqual(run(null, 'no-reply@us.greenhouse-mail.io', 'Thank you for applying to OppFi!',
+    'Your application has been submitted to LinkedIn We have received your application and our team will review it.'), 'LinkedIn We have received your application');
+  assert.equal(run(null, 'no-reply@us.greenhouse-mail.io', 'Thank you for applying to OppFi!', 'We have received your application.'), 'OppFi');
+  // LinkedIn as the employer, through its ATS.
+  assert.equal(run('LinkedIn Hiring Team', 'notifications@smartrecruiters.com', 'Your application for Software Engineer - Applications at LinkedIn', 'Thanks for applying.'), 'LinkedIn');
+  // Workday system sender with an underscore; company named in the subject.
+  assert.equal(run('WorkdaySystem_DoNotReply', 'thomsonreuters@myworkday.com', 'Thomson Reuters received your application!', 'Thank you.'), 'Thomson Reuters');
+  assert.equal(companyFromSender('WorkdaySystem_DoNotReply'), null);
+  assert.equal(run('Sentry', 'no-reply@ashbyhq.com', 'Thank you for applying to become a Sentaur!', 'We received your application.'), 'Sentry');
+  assert.equal(run('Rivian Automotive, LLC', 'rivian+autoreply@talent.icims.com', 'Thank You for Applying at Rivian Automotive, LLC', 'Thanks.'), 'Rivian Automotive');
+});

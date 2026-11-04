@@ -28,16 +28,22 @@ const compact = (s) => normalize(s).replace(/ /g, '');
 const titleCase = (s) => s.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function validCompany(s) {
+// A company name never reads like a sentence ("LinkedIn We have received your application").
+const SENTENCE_WORD = /\b(?:we|have|has|your|our|you|received|receiving|application|applying|applied|thank|thanks|please|will|regarding)\b/i;
+
+function validCompany(s, { allowBoards = false } = {}) {
   let c = clean(s)
     .replace(/'s\b.*$/i, '') // "Notion's engineering team" -> "Notion"
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9)&.]+$/g, '')
     .replace(/\.$/, '');
   if (/@/.test(c)) return null;
+  c = c.replace(/,?\s+(?:LLC|L\.L\.C\.|Inc\.?|Ltd\.?|Corp\.?|Co\.)$/i, ''); // "Rivian Automotive, LLC"
   const domainLike = c.match(/^(?:[\w-]+\.)*([\w-]+)\.(?:com|net|org|io|ai|co|us|tech|dev|app)$/i);
   if (domainLike) c = titleCase(domainLike[1]);
   if (c.length < 2 || c.length > 60 || c.split(' ').length > 6) return null;
-  if (BAD_COMPANY.test(c) || GENERIC_NAMES.has(c.toLowerCase())) return null;
+  if (BAD_COMPANY.test(c) || SENTENCE_WORD.test(c)) return null;
+  // Job boards and ATSs aren't employers, except an ATS sending for "LinkedIn Hiring Team".
+  if (!allowBoards && (GENERIC_NAMES.has(c.toLowerCase()) || GENERIC_NAMES.has(c.split(/\s+/)[0].toLowerCase()))) return null;
   if (!/[a-z]/i.test(c)) return null;
   return c;
 }
@@ -63,14 +69,17 @@ export function cleanRole(s, company) {
 
 // "Stripe Recruiting" -> "Stripe", "Workday. PayPal" -> "PayPal". Returns {name, org} where org says
 // the name came with a recruiting word, which a person's name never does.
-export function companyFromSender(name) {
-  let n = clean(name);
+export function companyFromSender(name, { allowBoards = false } = {}) {
+  let n = clean(name).replace(/_/g, ' ');
   if (!n) return null;
-  if (!/\s/.test(n) && /[a-z][A-Z]/.test(n)) {
-    const split = n.replace(/([a-z])([A-Z])/g, '$1 $2'); // "WorkdaySystemDoNotReply"
-    if (SENDER_NOISE.test(split)) n = split;
+  // Split a camelCase word only when it hides recruiting words ("WorkdaySystem", "DoNotReply"),
+  // so "LinkedIn" and "PayPal" stay intact.
+  n = n.split(' ').map((word) => {
+    const split = word.replace(/([a-z])([A-Z])/g, '$1 $2');
+    const noisy = split !== word && SENDER_NOISE.test(split);
     SENDER_NOISE.lastIndex = 0;
-  }
+    return noisy ? split : word;
+  }).join(' ');
   if (/^[^\s@]+@[^\s@]+$/.test(n)) n = n.split('@')[1]; // "noreply@questdiagnostics.com"
   const at = n.match(/\s(?:at|@|from)\s+(.+)$/i); // "Jane at Stripe"
   if (at) n = at[1];
@@ -79,17 +88,18 @@ export function companyFromSender(name) {
   if (domainLike) n = domainLike[1]; // "Careers @ .questdiagnostics.com"
   const stripped = n.replace(/\s*[|–—:.-]+\s*/g, ' ').replace(SENDER_NOISE, ' ').replace(/\s+/g, ' ').trim();
   const org = !!at || compact(stripped) !== compact(n);
-  const valid = validCompany(stripped);
+  const valid = validCompany(stripped, { allowBoards });
   return valid ? { name: valid, org } : null;
 }
 
 // Company names written in the subject or body, in priority order.
 const COMPANY_PATTERNS = [
   /\byour application (?:was|has been) (?:sent|submitted) to ([^\n]+?)\s*(?:$|\n|[.!])/im,
-  /\b(?:position|role|opening|opportunity|job|internship) (?:at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
-  /\b(?:applying|applied|application|apply) (?:to|at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
+  /\b(?:[Pp]osition|[Rr]ole|[Oo]pening|[Oo]pportunity|[Jj]ob|[Ii]nternship) (?:[Aa]t|[Ww]ith) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
+  /\b(?:[Aa]pplying|[Aa]pplied|[Aa]pplication|[Aa]pply) (?:[Tt]o|[Aa]t|[Ww]ith) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
   /^([A-Z0-9][\w&.' -]{1,40}?) (?:has )?invited you\b/m,
-  /\binterest in (?:joining |working (?:at|with) |a career (?:at|with) |careers at )?([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| and\b|'s\b))/m,
+  /^([A-Z0-9][\w&.' -]{1,40}?) (?:has )?received your application\b/m,
+  /\b[Ii]nterest [Ii]n (?:joining |working (?:at|with) |a career (?:at|with) |careers at )?([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| and\b|'s\b))/m,
   /\bjoin(?:ing)? (?:the )?([A-Z0-9][\w&.' -]{1,40}?) team\b/m,
 ];
 
@@ -171,7 +181,7 @@ function linkedInDetails(body, company) {
 function pickCompany({ domain, platform, board, subject, head, fromName, fromAddr }) {
   const texts = [subject, head];
   const fromText = firstMatch(COMPANY_PATTERNS, texts, validCompany);
-  const sender = companyFromSender(fromName);
+  const sender = companyFromSender(fromName, { allowBoards: platform === 'ats' });
   // A bare two-word sender name with no recruiting words is usually a person ("Erica Saunders").
   const senderOk = sender && (sender.org || !/\s/.test(sender.name) || new RegExp(`\\b${escapeRe(sender.name)}\\b`, 'i').test(subject));
   const fromSender = senderOk ? sender.name : null;

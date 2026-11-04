@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classify, domainIn, OA_DOMAINS } from '../src/classify.js';
-import { slugFromUrl, aliasesFor, companyCore, matchJob, rolesAgree, sameCompany } from '../src/match.js';
+import { slugFromUrl, aliasesFor, companyCore, matchJob, rolesAgree, sameCompany, namedBySender } from '../src/match.js';
 
 const cat = (email) => classify(email).category;
 
@@ -255,4 +255,14 @@ test('short company names only match the sender name, subject or exact domain', 
   assert.equal(matchJob(jobs, { from_name: 'workday- f5', from_domain: 'myworkday.com', subject: 'Thank you for applying', body: '' }).id, 2);
   assert.equal(matchJob(jobs, { from_name: 'Recruiting', from_domain: 'kla.com', subject: 'Update', body: '' }).id, 3);
   assert.equal(matchJob(jobs, { from_name: 'Klarna', from_domain: 'klarna.com', subject: 'Update', body: '' }), null);
+});
+
+test('short forms only match in the sender name or subject; namedBySender', () => {
+  const jobs = [{ id: 1, company: 'Together AI', aliases: 'together ai', role: 'SWE', status: 'applied', applied_at: '2026-11-01' }];
+  assert.equal(matchJob(jobs, { from_name: 'Acme', from_domain: 'acme.com', subject: 'Thanks for applying', body: 'We look forward to working together.' }), null);
+  assert.equal(matchJob(jobs, { from_name: 'Together Recruiting', from_domain: 'ashbyhq.com', subject: 'Thanks', body: '' }).id, 1);
+  const clear = { company: 'CLEAR', aliases: 'clear' };
+  assert.equal(namedBySender(clear, { from_name: 'Decagon', from_domain: 'ashbyhq.com', subject: 'Decagon: Application Confirmation' }), false);
+  assert.equal(namedBySender(clear, { from_name: 'CLEAR Talent', from_domain: 'greenhouse-mail.io', subject: 'Update' }), true);
+  assert.equal(namedBySender({ company: 'IBM', aliases: 'ibm' }, { from_name: 'Talent', from_domain: 'ibm.com', subject: 'x' }), true);
 });
