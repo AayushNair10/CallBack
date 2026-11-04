@@ -9,7 +9,7 @@ const state = {
   emails: [],
   filter: 'all',
   search: '',
-  sort: { key: 'updated_at', dir: -1 },
+  sort: { key: 'applied_at', dir: -1 }, // most recent applications first
   showAll: false,
 };
 
