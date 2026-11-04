@@ -2,7 +2,7 @@
 
 My personal job-application tracker.
 
-- **Chrome extension**: on a job posting, click the icon. It reads the company, role, location and pay range from the page, I check the fields, and save. On **jobright.ai** it saves the job by itself when I click Apply. A dashboard shows every application.
+- **Chrome extension**: on a job posting, click the icon. It reads the company, role, location and pay range from the page, I check the fields, and save. On **jobright.ai** it adds the job by itself once jobright records that I applied. A dashboard shows every application.
 - **Applications I never saved still show up**: a "thanks for applying" email (or an OA, interview or rejection) that matches no saved job creates the job automatically.
 - **Cloudflare Worker + D1** stores jobs, recruiting emails and a status history.
 - **Google Apps Script** reads Gmail every 5 minutes on Google's servers (Spam folder included) and posts new mail to the Worker. It has **read-only** Gmail access and keeps working when my laptop is off.
@@ -113,10 +113,11 @@ The script stays within Gmail's rate limits: it asks the Worker which messages i
 
 Now open any job posting and click the icon. Check the fields and click **Save**. If the posting is already saved, the popup shows "Already saved (status …)" and the button changes to **Update**.
 
-**jobright.ai**: nothing to click.
-- Pressing an **Apply** button on jobright (on a job page or in the feed) saves that job as **saved**, with jobright's company, role, location and pay. A note appears in the corner.
-- When jobright records that you applied (you confirm it on jobright after applying), Callback marks the job **applied**. Undoing it on jobright moves it back to **saved**, unless emails have already moved it further. The extension learns this by watching jobright's own "applied" request in the page; it never calls jobright itself.
-- Opening your jobright **Applied** page (`jobright.ai/jobs/applied`) copies the **100 most recent** jobs listed there into Callback once each, filling in the role, location and pay on jobs that were created from emails. Jobs that only exist on jobright are added with today's date as the applied date.
+**jobright.ai**: nothing to click in Callback.
+- Clicking **Apply** on jobright changes nothing by itself. Only when jobright records that you applied (you answer "Yes, I applied" on jobright after applying) does Callback add the job as **applied**, with jobright's company, role, location and pay, or move an existing **saved** job to **applied**. A note appears in the corner.
+- Undoing it on jobright moves the job back to **saved**, unless emails have already moved it further.
+- Internships and co-ops from jobright are skipped. (Internship confirmation emails still create jobs.)
+- Past jobright applications are not imported. The extension learns about an application by watching jobright's own "applied" request in the page; it never calls jobright's API itself.
 
 Chrome asks to allow the extension on jobright.ai the first time you reload it.
 
@@ -154,7 +155,7 @@ The dashboard hides `job_alert`, `newsletter` and `other` by default; tick **sho
 | Source | What happens |
 |--------|--------------|
 | Extension popup | You check the fields and click Save. |
-| jobright.ai | **saved** when you press Apply, **applied** when jobright records your application; your 100 most recent jobright applications sync from the Applied page. |
+| jobright.ai | Added as **applied** when jobright records your application (internships skipped). |
 | A confirmation, OA, interview or rejection email that matches nothing | A job is created from the email: company from the subject, sender or address, plus the role, location and posting link when the email includes them (LinkedIn "application sent" emails usually do). Pay isn't in these emails. Job alerts, newsletters, recruiter cold outreach, scams, free-mail senders and unknown senders in Spam never create jobs. OA/interview/offer emails only create one if they come from an assessment, ATS or scheduling platform or mention your application. |
 
 The same job arriving from several sources becomes one row. Saving checks for a job at the same company with the same role, and updates it instead of adding a duplicate, unless both have different employer-site URLs (those are separate postings, such as two "SDE I" openings). A merged row keeps the employer-site URL over a LinkedIn/jobright one, and keeps its status.
