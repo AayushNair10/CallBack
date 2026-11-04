@@ -329,7 +329,7 @@ async function sendNotification(env, { plan, category, job, email, inSpam }) {
     click: `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(email.thread_id || '')}`,
     link: email.link ? { label: category === 'oa' ? 'Open assessment' : 'Open scheduler', url: email.link } : null,
   };
-  return (await deliver(env, note)).ok;
+  return deliver(env, note);
 }
 
 const telegramReady = (env) => !!(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID);
@@ -358,12 +358,16 @@ async function postTelegram(env, note) {
   return postJson(`${env.TELEGRAM_API_URL || 'https://api.telegram.org'}/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, payload, {}, 'Telegram');
 }
 
+// If ntfy refuses (ntfy.sh's free tier limits per IP, and Cloudflare Workers share IPs), the
+// ready-to-send request is returned as `push` so the Apps Script can send it from Google's network.
 async function postNtfy(env, note) {
   const payload = { topic: env.NTFY_TOPIC, title: note.title, message: note.message, priority: note.priority, tags: [note.tag] };
   if (note.click) payload.click = note.click;
   if (note.link) payload.actions = [{ action: 'view', label: note.link.label, url: note.link.url }];
   const headers = env.NTFY_TOKEN ? { Authorization: `Bearer ${env.NTFY_TOKEN}` } : {};
-  return postJson(env.NTFY_URL || 'https://ntfy.sh', payload, headers, 'ntfy');
+  const url = env.NTFY_URL || 'https://ntfy.sh';
+  const res = await postJson(url, payload, headers, 'ntfy');
+  return res.ok ? res : { ...res, push: { url, headers, body: payload } };
 }
 
 // Returns {ok, status, detail} and logs failures (visible with `npx wrangler tail`).
@@ -394,6 +398,10 @@ async function notifyTest(env) {
     link: null,
   });
   const out = { ok: res.ok, channel, status: res.status, response: res.detail };
+  if (res.push) {
+    out.push = res.push;
+    out.hint = 'ntfy refused this request from Cloudflare. In normal use the Apps Script resends it from Google; run testNotification() in Apps Script to try that path.';
+  }
   if (channel === 'ntfy') out.topic_hint = `${env.NTFY_TOPIC.slice(0, 9)}… (${env.NTFY_TOPIC.length} characters)`;
   if (channel === 'telegram' && !res.ok) out.hint = 'Check the bot token, and that you sent your bot a message first so it is allowed to message you.';
   return json(out);
@@ -514,11 +522,14 @@ async function ingest(env, request) {
 
     // Notify before inserting so the row is written once with the right flag.
     let notified = false;
+    let push = null;
     const plan = notificationPlan({ category, job, platform, domain: from.from_domain, inSpam });
     const fresh24h = Date.now() - new Date(m.received_at).getTime() < DAY_MS;
     if (plan && notify && fresh24h && !(email.thread_id && notifiedThreads.has(email.thread_id))) {
-      notified = await sendNotification(env, { plan, category, job, email, inSpam });
-      if (notified && email.thread_id) notifiedThreads.add(email.thread_id);
+      const sent = await sendNotification(env, { plan, category, job, email, inSpam });
+      notified = sent.ok;
+      push = sent.push || null;
+      if ((notified || push) && email.thread_id) notifiedThreads.add(email.thread_id);
     }
 
     const row = await env.DB.prepare(
@@ -527,7 +538,7 @@ async function ingest(env, request) {
        ON CONFLICT(gmail_id) DO NOTHING RETURNING id`,
     ).bind(
       email.gmail_id, email.thread_id, email.from_name, email.from_addr, email.from_domain, email.subject,
-      m.received_at, category, job?.id ?? null, link, inSpam ? 1 : 0, notified ? 1 : 0,
+      m.received_at, category, job?.id ?? null, link, inSpam ? 1 : 0, notified || push ? 1 : 0,
     ).first();
     if (!row) continue; // raced with another ingest
 
@@ -539,7 +550,9 @@ async function ingest(env, request) {
     }
 
     const rescue = inSpam && ((!!job && !!STATUS_FOR[category]) || (!!platform && NOTIFY_CATEGORIES.has(category)));
-    results.push({ gmail_id: email.gmail_id, thread_id: email.thread_id, category, company: job?.company ?? null, created_job: created, notified, rescue });
+    const result = { gmail_id: email.gmail_id, thread_id: email.thread_id, category, company: job?.company ?? null, created_job: created, notified, rescue };
+    if (push) result.push = push; // the Apps Script sends it
+    results.push(result);
   }
 
   return json({ results, skipped: messages.length - fresh.length });
