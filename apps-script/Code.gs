@@ -13,13 +13,15 @@
  * Run setup() once to install the trigger. Run backfill() to import the last 45 days.
  */
 
-var BATCH_SIZE = 10;         // keeps each Worker request well under D1's 50-query limit
+var BATCH_SIZE = 10;            // keeps each Worker request well under D1's 50-query limit
 var PAGE_SIZE = 100;
-var POLL_MAX_MESSAGES = 300;
-var BACKFILL_MAX_MESSAGES = 500;
+var POLL_MAX_MESSAGES = 2000;   // listing is cheap; only new messages are downloaded
+var BACKFILL_MAX_MESSAGES = 5000;
 var BACKFILL_DAYS = 45;
-var OVERLAP_SECONDS = 600;   // re-read the last 10 minutes; the Worker skips duplicates
+var OVERLAP_SECONDS = 600;      // re-read the last 10 minutes; already-stored messages are skipped
 var BODY_CHARS = 6000;
+var MAX_RUN_MS = 4.5 * 60 * 1000; // stop well before Apps Script's 6-minute limit
+var GET_PAUSE_MS = 100;         // paces downloads far below Gmail's per-user rate limit
 
 function setup() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -32,81 +34,132 @@ function setup() {
 
 function poll() {
   withLock_(function () {
-    var since = Number(props_().getProperty('LAST_TS')) || Date.now() - 60 * 60 * 1000;
-    var newest = sync_(since, POLL_MAX_MESSAGES, true);
-    // Only reached if every batch succeeded; sync_ throws otherwise so the next run retries.
-    if (newest > since) props_().setProperty('LAST_TS', String(newest));
+    var started = Date.now();
+    var since = Number(props_().getProperty('LAST_TS')) || started - 60 * 60 * 1000;
+    var done = sync_(since, POLL_MAX_MESSAGES, true);
+    // Only move the cursor once everything in the window is stored. If this run stopped
+    // early, the next one lists the same window and skips what's already done.
+    if (done) props_().setProperty('LAST_TS', String(started));
   });
 }
 
+/** Imports the last 45 days without notifications. Safe to run repeatedly; it resumes. */
 function backfill() {
   withLock_(function () {
-    sync_(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000, BACKFILL_MAX_MESSAGES, false);
+    var done = sync_(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000, BACKFILL_MAX_MESSAGES, false);
+    console.log(done ? 'Callback: backfill complete' : 'Callback: backfill paused, run backfill() again to continue');
   });
 }
 
-/** Fetches messages newer than `since` (ms), posts them, and returns the newest timestamp seen. */
+/**
+ * Sends every message newer than `since` (ms) that the Worker doesn't have yet, oldest first.
+ * Returns true if the whole window was processed, false if it stopped early.
+ */
 function sync_(since, maxMessages, notify) {
+  var started = Date.now();
   var cfg = config_();
   var after = Math.floor(since / 1000) - OVERLAP_SECONDS;
   var query = 'in:anywhere -in:trash after:' + after + ' -from:me -in:chats';
-  var cutoff = after * 1000;
 
   var ids = [];
   var pageToken = null;
   do {
-    var page = Gmail.Users.Messages.list('me', {
-      q: query,
-      maxResults: Math.min(PAGE_SIZE, maxMessages - ids.length),
-      includeSpamTrash: true,
-      pageToken: pageToken
+    var page = withRetry_(function () {
+      return Gmail.Users.Messages.list('me', {
+        q: query,
+        maxResults: Math.min(PAGE_SIZE, maxMessages - ids.length),
+        includeSpamTrash: true,
+        pageToken: pageToken
+      });
     });
     (page.messages || []).forEach(function (m) { ids.push(m.id); });
     pageToken = page.nextPageToken;
   } while (pageToken && ids.length < maxMessages);
+  var listedAll = !pageToken;
+  if (!listedAll) console.log('Callback: more than %s messages in this window; processing the newest %s', maxMessages, ids.length);
 
-  var messages = [];
-  var newest = since;
-  ids.forEach(function (id) {
-    var msg = Gmail.Users.Messages.get('me', id, { format: 'full' });
-    var labels = msg.labelIds || [];
-    if (labels.indexOf('DRAFT') !== -1 || labels.indexOf('SENT') !== -1) return;
-    var ts = Number(msg.internalDate);
-    if (ts < cutoff) return;
-    if (ts > newest) newest = Math.min(ts, Date.now());
+  ids.reverse(); // Gmail lists newest first; process oldest first
+  var known = knownIds_(cfg, ids);
+  var todo = ids.filter(function (id) { return !known[id]; });
 
-    var headers = headerMap_(msg.payload);
-    messages.push({
-      gmail_id: msg.id,
-      thread_id: msg.threadId,
-      from: headers['from'] || '',
-      subject: headers['subject'] || '',
-      date: new Date(ts).toISOString(),
-      body: bodyText_(msg.payload).slice(0, BODY_CHARS),
-      list_unsubscribe: !!headers['list-unsubscribe'],
-      in_spam: labels.indexOf('SPAM') !== -1
-    });
-  });
-
-  messages.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
-
-  var sent = 0;
-  var inSpam = [];
-  for (var i = 0; i < messages.length; i += BATCH_SIZE) {
-    var batch = messages.slice(i, i + BATCH_SIZE);
-    var res = post_(cfg, { messages: batch, notify: notify });
-    sent += batch.length;
-    (res.results || []).forEach(function (r) {
-      if (r.rescue) inSpam.push(r.company || r.category);
-    });
+  var pending = [];
+  var stats = { sent: 0, inSpam: [] };
+  var finished = true;
+  for (var i = 0; i < todo.length; i++) {
+    if (Date.now() - started > MAX_RUN_MS) {
+      finished = false;
+      break;
+    }
+    var msg = fetchMessage_(todo[i]);
+    if (msg) pending.push(msg);
+    if (pending.length === BATCH_SIZE) {
+      flush_(cfg, pending, notify, stats);
+      pending = [];
+    }
   }
+  if (pending.length) flush_(cfg, pending, notify, stats);
 
-  console.log('Callback: sent %s messages', sent);
-  if (inSpam.length) {
+  console.log('Callback: %s new of %s listed, sent %s%s', todo.length, ids.length, stats.sent,
+    finished ? '' : ' (stopped early to stay under the time limit; the next run continues)');
+  if (stats.inSpam.length) {
     // Read-only, so we can't move these; the dashboard and notification flag them instead.
-    console.log('Callback: %s real recruiting email(s) are in Spam: %s', inSpam.length, inSpam.join(', '));
+    console.log('Callback: %s real recruiting email(s) are in Spam: %s', stats.inSpam.length, stats.inSpam.join(', '));
   }
-  return newest;
+  return finished && listedAll;
+}
+
+function fetchMessage_(id) {
+  var msg = withRetry_(function () { return Gmail.Users.Messages.get('me', id, { format: 'full' }); });
+  Utilities.sleep(GET_PAUSE_MS);
+  var labels = msg.labelIds || [];
+  if (labels.indexOf('DRAFT') !== -1 || labels.indexOf('SENT') !== -1) return null;
+
+  var ts = Number(msg.internalDate);
+  var headers = headerMap_(msg.payload);
+  return {
+    gmail_id: msg.id,
+    thread_id: msg.threadId,
+    from: headers['from'] || '',
+    subject: headers['subject'] || '',
+    date: new Date(ts).toISOString(),
+    body: bodyText_(msg.payload).slice(0, BODY_CHARS),
+    list_unsubscribe: !!headers['list-unsubscribe'],
+    in_spam: labels.indexOf('SPAM') !== -1
+  };
+}
+
+function flush_(cfg, messages, notify, stats) {
+  messages.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  var res = post_(cfg, '/api/ingest', { messages: messages, notify: notify });
+  stats.sent += messages.length;
+  (res.results || []).forEach(function (r) {
+    if (r.rescue) stats.inSpam.push(r.company || r.category);
+  });
+}
+
+/** Asks the Worker which of these Gmail ids it already stored. */
+function knownIds_(cfg, ids) {
+  var known = {};
+  for (var i = 0; i < ids.length; i += 500) {
+    var res = post_(cfg, '/api/known', { ids: ids.slice(i, i + 500) });
+    (res.known || []).forEach(function (id) { known[id] = true; });
+  }
+  return known;
+}
+
+/** Retries Gmail calls that hit rate or quota limits, backing off up to ~1 minute in total. */
+function withRetry_(fn) {
+  var waits = [2000, 4000, 8000, 16000, 30000];
+  for (var attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (e) {
+      var retryable = /quota|rate ?limit|too many|429|backend error|503|internal error/i.test(String(e && e.message));
+      if (!retryable || attempt >= waits.length) throw e;
+      console.log('Callback: Gmail limit hit, waiting %ss (%s)', waits[attempt] / 1000, String(e.message).slice(0, 120));
+      Utilities.sleep(waits[attempt]);
+    }
+  }
 }
 
 function headerMap_(payload) {
@@ -178,8 +231,8 @@ function htmlToText_(html) {
     .replace(/[ \t]+/g, ' ');
 }
 
-function post_(cfg, payload) {
-  var resp = UrlFetchApp.fetch(cfg.url + '/api/ingest', {
+function post_(cfg, path, payload) {
+  var resp = UrlFetchApp.fetch(cfg.url + path, {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + cfg.token },
