@@ -99,7 +99,7 @@ ntfy.sh's free tier limits messages per IP address, and Cloudflare Workers share
    - `API_TOKEN` = the token from step 1
 5. Back in the editor, pick `setup` in the function dropdown and click **Run**. The consent screen should ask only to **view** your email, connect to an external service, and run when you're not present. Google will warn that the app is unverified: Gmail access is a restricted scope and Google only verifies apps published to other people, so this always appears for a personal script. Use **Advanced → Go to Callback (unsafe)**.
    `setup()` installs an every-5-minutes trigger, starts syncing from one hour ago, and runs the first sync.
-6. Optional: run `backfill()` once to import the last 45 days. It doesn't send notifications and doesn't move the sync cursor. Applications from that period are created from their confirmation emails. It works oldest-first, and each run stops after about 4½ minutes (Apps Script's limit is 6), then schedules the next run a minute later by itself, until the log says `backfill complete`. A large mailbox takes several runs, so the newest applications appear last.
+6. Optional: run `backfill()` once to import the last 45 days. Like every sync, it only notifies for emails from the last 24 hours, so old mail stays quiet. It doesn't move the sync cursor. Applications from that period are created from their confirmation emails. It works oldest-first, and each run stops after about 4½ minutes (Apps Script's limit is 6), then schedules the next run a minute later by itself, until the log says `backfill complete`. A large mailbox takes several runs, so the newest applications appear last.
 
 The **Executions** tab shows each run's log (`N new of M listed, sent N`, plus a line listing any real recruiting emails sitting in Spam).
 
@@ -172,6 +172,8 @@ If you correct an email in the dashboard (its category, or which job it belongs 
 ### Aliases
 
 Each job stores comma-separated aliases used to match emails. They're generated from the company name with legal suffixes removed (`Amazon.com Services LLC` → `amazon`) and from the ATS slug in the URL (`capitalone.wd12.myworkdayjobs.com` → `capitalone`). A match scores +10 if an alias appears as a word in the sender name, subject or body, +20 if the sender's domain contains it, then +1 per role word in the subject and +1 if the job isn't rejected. Ties go to the newest application.
+
+Only emails that can change a status (confirmation, OA, interview, offer, rejection) are linked to jobs; receipts, account notices and other mail aren't. Names of three characters or fewer (F5, IBM) only match in the sender name or subject, or as the exact sender domain, because they're common as words ("ID").
 
 If a company emails under another name (Meta vs. Facebook, a parent company, a staffing agency), edit the small aliases field under the company name in the dashboard. You can also link any email to a job by hand with the **Link to job…** dropdown, which advances the job's status too.
 
