@@ -314,6 +314,15 @@ async function undoEmail(env, jobId, emailId) {
 
 // ---------- ingest ----------
 
+// Plain-text parts sometimes still contain HTML entities ("LinkedIn&nbsp;").
+const ENTITIES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", rsquo: "'", lsquo: "'", ldquo: '"', rdquo: '"', ndash: '–', mdash: '—', hellip: '…' };
+function decodeEntities(s) {
+  return String(s || '')
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&([a-z]+|#39);?/gi, (m, name) => ENTITIES[name.toLowerCase()] ?? m);
+}
+
 function parseFrom(from) {
   const s = String(from || '').trim();
   const m = s.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
@@ -461,7 +470,7 @@ async function ingest(env, request) {
   const notify = body.notify !== false;
   const messages = (Array.isArray(body.messages) ? body.messages : [])
     .filter((m) => m && m.gmail_id)
-    .map((m) => ({ ...m, received_at: toIso(m.date) }))
+    .map((m) => ({ ...m, from: decodeEntities(m.from), subject: decodeEntities(m.subject), body: decodeEntities(m.body), received_at: toIso(m.date) }))
     .sort((a, b) => a.received_at.localeCompare(b.received_at));
   if (!messages.length) return json({ results: [], skipped: 0 });
 
@@ -500,9 +509,11 @@ async function ingest(env, request) {
       body: m.body,
       list_unsubscribe: m.list_unsubscribe,
     });
-    let job = NOISE.has(category)
-      ? null
-      : matchJob(jobs, { from_name: from.from_name, from_domain: from.from_domain, subject: m.subject, body: m.body });
+    // Only emails that can change a status are linked to jobs ("other" mail like receipts and
+    // account notices would otherwise attach to any company it mentions).
+    let job = STATUS_FOR[category]
+      ? matchJob(jobs, { from_name: from.from_name, from_domain: from.from_domain, subject: m.subject, body: m.body })
+      : null;
     const draft = NOISE.has(category) ? null : jobFromEmail({ ...from, subject: m.subject, body: m.body, in_spam: inSpam }, category);
 
     // The email names a different role than the job it matched (e.g. you saved one Stripe role

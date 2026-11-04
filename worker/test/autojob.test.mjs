@@ -172,3 +172,10 @@ test('real-inbox company cases', () => {
   assert.equal(cleanRole('Abnormal AI', 'Abnormal'), null);
   assert.equal(cleanRole('Abnormal AI Security Engineer', 'Abnormal'), 'Abnormal AI Security Engineer');
 });
+
+test('company names with dots ("ID.me") are kept whole', () => {
+  const job = jobFromEmail({ from_name: null, from_addr: 'no-reply@us.greenhouse-mail.io', from_domain: 'us.greenhouse-mail.io',
+    subject: 'Thank you for applying to ID.me', body: 'Thanks for applying to ID.me. We will review your application.' }, 'application_received');
+  assert.equal(job.company, 'ID.me');
+  assert.deepEqual(job.aliases, ['id me']);
+});

@@ -243,3 +243,16 @@ test('matchJob finds "Cerebras Systems" from an email that says "Cerebras", and 
   assert.equal(matchJob(jobs, { from_name: 'Talent', from_domain: 'f5.com', subject: 'Update', body: '' }).id, 2);
   assert.equal(matchJob(jobs, { from_name: 'Shopify', from_domain: 'shopify.com', subject: 'Update', body: '' }), null);
 });
+
+test('short company names only match the sender name, subject or exact domain', () => {
+  const jobs = [
+    { id: 1, company: 'ID', aliases: 'id', role: null, status: 'applied', applied_at: '2026-10-27' },
+    { id: 2, company: 'F5', aliases: 'f5', role: null, status: 'applied', applied_at: '2026-09-01' },
+    { id: 3, company: 'KLA', aliases: 'kla', role: null, status: 'applied', applied_at: '2026-09-01' },
+  ];
+  // "ID" in the body of an unrelated email (the Abridge OA case).
+  assert.equal(matchJob(jobs, { from_name: 'Abridge', from_domain: 'coderpad.io', subject: 'Early Career Technical Assessment at Abridge', body: 'Your candidate ID is 123.' }), null);
+  assert.equal(matchJob(jobs, { from_name: 'workday- f5', from_domain: 'myworkday.com', subject: 'Thank you for applying', body: '' }).id, 2);
+  assert.equal(matchJob(jobs, { from_name: 'Recruiting', from_domain: 'kla.com', subject: 'Update', body: '' }).id, 3);
+  assert.equal(matchJob(jobs, { from_name: 'Klarna', from_domain: 'klarna.com', subject: 'Update', body: '' }), null);
+});

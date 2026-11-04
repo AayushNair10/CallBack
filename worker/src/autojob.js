@@ -16,7 +16,7 @@ const GENERIC_NAMES = new Set([
   'hackerrank', 'codesignal', 'codility', 'hirevue', 'calendly', 'goodtime', 'gem', 'paradox', 'karat',
   'jobright', 'ripplematch', 'notification', 'support', 'info', 'admin', 'mail', 'email', 'system', 'the', 'a', 'our', 'your',
 ]);
-const BAD_COMPANY = /^(?:a|an|the|our|your|this|that|us|you|we|it|position|role|job|team|opportunity|software|engineer|intern|company|organization|hiring|recruiting|careers?)$/i;
+const BAD_COMPANY = /^(?:a|an|the|our|your|this|that|us|you|we|it|id|re|fw|fwd|hi|no|na|n\/a|position|role|job|team|opportunity|software|engineer|intern|company|organization|hiring|recruiting|careers?)$/i;
 
 // A role must contain a job-title word ("Data" or "AI" alone isn't enough)...
 const TITLE_WORD = /\b(?:engineer(?:ing)?|developer|scientist|analyst|intern(?:ship)?|co-?op|designer|manager|programmer|architect|specialist|associate|consultant|researcher|sde|swe|sre|devops|qa|tester|fellow(?:ship)?|technician|administrator|lead|director|coordinator|representative|officer|accountant|strategist|writer|recruiter|advisor|graduate|new grad|trainee|apprentice|technologist|quant|trader)\b/i;
@@ -86,10 +86,10 @@ export function companyFromSender(name) {
 // Company names written in the subject or body, in priority order.
 const COMPANY_PATTERNS = [
   /\byour application (?:was|has been) (?:sent|submitted) to ([^\n]+?)\s*(?:$|\n|[.!])/im,
-  /\b(?:position|role|opening|opportunity|job|internship) (?:at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
-  /\b(?:applying|applied|application|apply) (?:to|at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
+  /\b(?:position|role|opening|opportunity|job|internship) (?:at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
+  /\b(?:applying|applied|application|apply) (?:to|at|with) ([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| has\b| is\b| and\b| was\b))/m,
   /^([A-Z0-9][\w&.' -]{1,40}?) (?:has )?invited you\b/m,
-  /\binterest in (?:joining |working (?:at|with) |a career (?:at|with) |careers at )?([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!.,:;()]| for | - | – | — | team\b| and\b|'s\b))/m,
+  /\binterest in (?:joining |working (?:at|with) |a career (?:at|with) |careers at )?([A-Z0-9][\w&.' -]*?)(?=\s*(?:$|\n|[!,:;()]|\.(?=\s|$)| for | - | – | — | team\b| and\b|'s\b))/m,
   /\bjoin(?:ing)? (?:the )?([A-Z0-9][\w&.' -]{1,40}?) team\b/m,
 ];
 

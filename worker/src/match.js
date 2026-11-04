@@ -139,6 +139,9 @@ function roleWords(role) {
 // Returns the best-matching job or null.
 export function matchJob(jobs, email) {
   const hay = ` ${normalize([email.from_name, email.subject, String(email.body || '').slice(0, 3000)].join(' '))} `;
+  // Names of 3 characters or fewer ("F5", "IBM") are common as words ("ID", "msg"), so they
+  // only count in the sender name or subject, never the body.
+  const head = ` ${normalize([email.from_name, email.subject].join(' '))} `;
   const subject = ` ${normalize(email.subject)} `;
   const domain = String(email.from_domain || '').toLowerCase().replace(/[^a-z0-9.]/g, '');
 
@@ -148,10 +151,10 @@ export function matchJob(jobs, email) {
     const aliases = jobAliases(job);
     let score = 0;
     const label = domain.split('.').slice(-2, -1)[0] || '';
-    if (aliases.some((a) => hay.includes(` ${a} `))) score += 10;
+    if (aliases.some((a) => (a.length <= 3 ? head : hay).includes(` ${a} `))) score += 10;
     else if (aliases.some((a) => shortName(a) && hay.includes(` ${shortName(a)} `))) score += 5;
-    // Two-letter names ("f5") must equal the domain name; longer ones may be part of it.
-    const inDomain = (a) => (a.length <= 2 ? label === a : domain.includes(a));
+    // Short names ("f5", "ibm") must equal the domain name; longer ones may be part of it.
+    const inDomain = (a) => (a.length <= 3 ? label === a : domain.includes(a));
     if (domain && aliases.some((a) => inDomain(a.replace(/ /g, '')))) score += 20;
     else if (domain && aliases.some((a) => shortName(a) && domain.includes(shortName(a)))) score += 15;
     if (!score) continue;
