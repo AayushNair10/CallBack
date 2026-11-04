@@ -52,6 +52,15 @@ test('interview from calendly.com even with List-Unsubscribe', () => {
   assert.equal(r.link, 'https://calendly.com/reschedulings/abc');
 });
 
+test('a confirmation sent through Gem is not an interview', () => {
+  const body = 'Hi Aayush,\n\nThank you for your interest in joining our team at Imagen Technologies. We have received your application for Software Engineer. We will reach out soon if there is a potential fit!\n\nBest,\nThe Imagen Technologies Talent Team';
+  assert.equal(cat({ from_domain: 'gem.com', subject: 'Thank you for applying to Imagen Technologies', body }), 'application_received');
+  assert.equal(cat({ from_domain: 'gem.com', subject: 'Imagen Technologies', body }), 'application_received');
+  // A real scheduling email through Gem still is.
+  assert.equal(cat({ from_domain: 'gem.com', subject: 'Imagen Technologies: pick a time to chat', body: 'Please select a time for your phone screen with our team.' }), 'interview');
+  assert.equal(cat({ from_domain: 'paradox.ai', subject: 'Your interview is confirmed', body: 'See you Tuesday.' }), 'interview');
+});
+
 test('rejection from Greenhouse', () => {
   assert.equal(cat({
     from_domain: 'us.greenhouse-mail.io',

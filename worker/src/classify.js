@@ -140,6 +140,10 @@ const INTERVIEW = [
   /\binterview (?:confirmation|schedule|details)\b/,
 ];
 
+// Scheduling platforms (Gem, Paradox, Yello…) also send confirmations and other mail, so their
+// emails only count as interviews when they talk about scheduling something.
+const SCHEDULING_WORDS = /\b(?:schedul\w*|reschedul\w*|book(?:ed|ing)? (?:a |your )?(?:time|slot|call|interview)|(?:pick|select|choose) a time|time slots?|availability|interview\w*|invit(?:e|ed|ation)|new event|event (?:scheduled|confirmed|updated|canceled|cancelled)|meeting|calendar|phone screen|video call)\b/;
+
 function clean(s) {
   return String(s || '')
     .toLowerCase()
@@ -191,7 +195,7 @@ function categorize({ domain, subject, text, listUnsub, platform }) {
   if (anyOf(OUTREACH, text) && !APPLIED_CONTEXT.test(text)) return 'recruiter_outreach';
   if (offer) return 'offer';
   if ((platform === 'oa' && anyOf(INVITE, text)) || anyOf(OA, text)) return 'oa';
-  if (platform === 'scheduling' || anyOf(INTERVIEW, text)) return 'interview';
+  if (anyOf(INTERVIEW, text) || (platform === 'scheduling' && SCHEDULING_WORDS.test(text))) return 'interview';
   if (anyOf(RECEIVED, text)) return 'application_received';
   return 'other';
 }
