@@ -43,14 +43,16 @@ function poll() {
 }
 
 /**
- * Imports the last 45 days without notifications, oldest first. Each run stops before the
+ * Imports the last 45 days, oldest first. Each run stops before the
  * 6-minute limit and schedules the next one, until everything is imported.
  */
 function backfill() {
   deleteTriggers_('backfill');
   var done = false;
   var ran = withLock_(function () {
-    done = sync_(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000, BACKFILL_MAX_MESSAGES, false);
+    // Notifications on: the Worker only alerts for emails under 24 hours old, so old mail stays
+    // quiet but a fresh OA or interview the backfill picks up still reaches your phone.
+    done = sync_(Date.now() - BACKFILL_DAYS * 24 * 60 * 60 * 1000, BACKFILL_MAX_MESSAGES, true);
   });
   if (ran && done) {
     console.log('Callback: backfill complete');
