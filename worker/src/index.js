@@ -279,7 +279,7 @@ async function sendNtfy(env, { plan, category, job, email, inSpam }) {
   const payload = {
     topic: env.NTFY_TOPIC,
     title: `${plan.prefix}${LABELS[category]}: ${who}`,
-    message: (email.subject || '(no subject)') + (inSpam ? '\n(Was in Spam, moved to inbox)' : ''),
+    message: (email.subject || '(no subject)') + (inSpam ? '\n(Found in your Spam folder)' : ''),
     priority: plan.priority,
     tags: [TAGS[category]],
     click: `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(email.thread_id || '')}`,

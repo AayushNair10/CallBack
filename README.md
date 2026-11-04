@@ -4,7 +4,7 @@ My personal job-application tracker.
 
 - **Chrome extension**: on a job posting, click the icon. It reads the company, role, location and pay range from the page, I check the fields, and save. A dashboard shows every application.
 - **Cloudflare Worker + D1** stores jobs, recruiting emails and a status history.
-- **Google Apps Script** reads Gmail every 5 minutes on Google's servers (Spam folder included) and posts new mail to the Worker. It keeps working when my laptop is off.
+- **Google Apps Script** reads Gmail every 5 minutes on Google's servers (Spam folder included) and posts new mail to the Worker. It has **read-only** Gmail access and keeps working when my laptop is off.
 - The Worker **classifies emails with plain rules** (no LLMs, no AI APIs), links each one to a saved job, moves the job's status forward, and **pushes a notification to my phone** via [ntfy.sh](https://ntfy.sh) for online assessments, interviews and offers.
 
 Plain JavaScript, no frameworks, no build step, free tiers only.
@@ -23,11 +23,11 @@ Plain JavaScript, no frameworks, no build step, free tiers only.
   │ Google Apps Script     │   batches of 10 messages      ▼          ▼
   │  every 5 min, on       │ ─────────────────────▶ ┌───────────┐ ┌──────────┐
   │  Google's servers      │                        │ D1 SQLite │ │ ntfy.sh  │
-  │  reads Inbox + Spam    │ ◀── rescue flags ───── │ jobs      │ └────┬─────┘
-  │  moves rescued mail    │                        │ emails    │      │ push
-  │  out of Spam           │                        │ events    │      ▼
+  │  reads Inbox + Spam    │ ◀── results ────────── │ jobs      │ └────┬─────┘
+  │  (gmail.readonly)      │                        │ emails    │      │ push
+  │                        │                        │ events    │      ▼
   └──────────┬─────────────┘                        └───────────┘  ┌────────┐
-             │ GmailApp                                            │ phone  │
+             │ Gmail API                                           │ phone  │
              ▼                                                     └────────┘
          ┌────────┐
          │ Gmail  │
@@ -39,7 +39,7 @@ Plain JavaScript, no frameworks, no build step, free tiers only.
 ```
 extension/    Manifest V3 extension (plain ES modules, load unpacked)
 worker/       Cloudflare Worker, D1 schema, classifier tests
-apps-script/  Code.gs: paste into a Google Apps Script project
+apps-script/  Code.gs + appsscript.json: paste into a Google Apps Script project
 ```
 
 ## Setup
@@ -84,14 +84,15 @@ Install **ntfy** ([Android](https://play.google.com/store/apps/details?id=io.hec
 
 1. Go to [script.google.com](https://script.google.com) → **New project**, name it "Callback".
 2. Replace the contents of `Code.gs` with [`apps-script/Code.gs`](apps-script/Code.gs).
-3. **Project Settings** (gear icon) → **Script properties** → add:
+3. **Project Settings** (gear icon) → tick **Show "appsscript.json" manifest file in editor**. Back in the editor, open `appsscript.json` and replace it with [`apps-script/appsscript.json`](apps-script/appsscript.json). This enables the Gmail API service and pins the permissions to **read-only** Gmail access, external requests (to reach your Worker) and triggers.
+4. **Project Settings** → **Script properties** → add:
    - `WORKER_URL` = `https://callback.<your-subdomain>.workers.dev`
    - `API_TOKEN` = the token from step 1
-4. Back in the editor, pick `setup` in the function dropdown and click **Run**. Approve the permissions (Gmail, external requests, triggers). Google will warn that the app is unverified: that's expected for your own script, so use **Advanced → Go to Callback**.
+5. Back in the editor, pick `setup` in the function dropdown and click **Run**. The consent screen should ask only to **view** your email, connect to an external service, and run when you're not present. Google will warn that the app is unverified: Gmail access is a restricted scope and Google only verifies apps published to other people, so this always appears for a personal script. Use **Advanced → Go to Callback (unsafe)**.
    `setup()` installs an every-5-minutes trigger, starts syncing from one hour ago, and runs the first sync.
-5. Optional: run `backfill()` once to import the last 45 days. It doesn't send notifications and doesn't move the sync cursor. Save your existing applications in the extension **first**, so old emails can be linked to them.
+6. Optional: run `backfill()` once to import the last 45 days. It doesn't send notifications and doesn't move the sync cursor. Save your existing applications in the extension **first**, so old emails can be linked to them.
 
-The **Executions** tab shows each run's log line (`sent N messages, rescued M threads from spam`).
+The **Executions** tab shows each run's log (`sent N messages`, plus a line listing any real recruiting emails sitting in Spam).
 
 ### 4. Chrome extension
 
@@ -153,12 +154,13 @@ Only `oa`, `interview` and `offer` emails trigger a push, only if they're less t
 
 Tapping the notification opens the thread in Gmail. If there's an assessment or scheduling link, the notification gets an **Open assessment** / **Open scheduler** button.
 
-### Spam rescue
+### Spam
 
-Gmail sometimes files real OA invites in Spam. A spam message is "rescued" (the Apps Script moves its thread back to the Inbox) when it's matched to a saved job and is a status-changing email, or when it comes from a known OA/ATS/scheduling platform and is an OA, interview or offer. Unknown senders stay in Spam, and their notification is suppressed.
+Gmail sometimes files real OA invites in Spam, so the script reads the Spam folder too. Because it's read-only, it never moves anything: a spam message that's matched to a saved job, or that comes from a known OA/ATS/scheduling platform, is still classified, still moves the job's status, and still notifies you, with "(Found in your Spam folder)" in the notification. The dashboard marks it **was in spam**. The Worker returns a `rescue` flag for these, and the Apps Script logs them. Unknown senders found in Spam never notify.
 
 ## Privacy
 
+- The Apps Script has **read-only** Gmail access (`gmail.readonly`): it can't send, delete, label or move mail.
 - Email **bodies are never stored**. The Apps Script sends the first 6,000 characters for classification; the Worker keeps only metadata (sender, subject, date, category, matched job, OA/scheduling link, spam flag).
 - Everything lives in your own Cloudflare account and Google account. No third-party services see your mail except ntfy.sh, which receives the subject line of OA/interview/offer emails. Use a long random topic, or [self-host ntfy](https://docs.ntfy.sh/install/) and set `NTFY_URL` in `wrangler.toml`.
 - Every API request needs the bearer token. The dashboard renders email content with `textContent` only and only allows `http(s)` links.
