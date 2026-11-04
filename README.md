@@ -113,7 +113,12 @@ The script stays within Gmail's rate limits: it asks the Worker which messages i
 
 Now open any job posting and click the icon. Check the fields and click **Save**. If the posting is already saved, the popup shows "Already saved (status …)" and the button changes to **Update**.
 
-**jobright.ai**: nothing to click. Opening your jobright **Applied** page (`jobright.ai/jobs/applied`) also copies every job listed there into Callback once, filling in the role, location and pay on jobs that were created from emails without them. Jobs that only exist on jobright are added with today's date as the applied date. When you press an **Apply** button on jobright (on a job page or in the recommendation feed), the extension reads that job and saves it as **applied**, with a green "✓ Saved to Callback" note in the corner. Chrome asks to allow the extension on jobright.ai the first time you reload it.
+**jobright.ai**: nothing to click.
+- Pressing an **Apply** button on jobright (on a job page or in the feed) saves that job as **saved**, with jobright's company, role, location and pay. A note appears in the corner.
+- When jobright records that you applied (you confirm it on jobright after applying), Callback marks the job **applied**. Undoing it on jobright moves it back to **saved**, unless emails have already moved it further. The extension learns this by watching jobright's own "applied" request in the page; it never calls jobright itself.
+- Opening your jobright **Applied** page (`jobright.ai/jobs/applied`) copies the **100 most recent** jobs listed there into Callback once each, filling in the role, location and pay on jobs that were created from emails. Jobs that only exist on jobright are added with today's date as the applied date.
+
+Chrome asks to allow the extension on jobright.ai the first time you reload it.
 
 > The manifest grants access to `https://*.workers.dev/*`. If you put the Worker on a custom domain, add it to `host_permissions` in `extension/manifest.json`.
 
@@ -149,7 +154,7 @@ The dashboard hides `job_alert`, `newsletter` and `other` by default; tick **sho
 | Source | What happens |
 |--------|--------------|
 | Extension popup | You check the fields and click Save. |
-| Apply on jobright.ai | Saved automatically as **applied** from jobright's job data (company, role, location, pay). |
+| jobright.ai | **saved** when you press Apply, **applied** when jobright records your application; your 100 most recent jobright applications sync from the Applied page. |
 | A confirmation, OA, interview or rejection email that matches nothing | A job is created from the email: company from the subject, sender or address, plus the role, location and posting link when the email includes them (LinkedIn "application sent" emails usually do). Pay isn't in these emails. Job alerts, newsletters, recruiter cold outreach, scams, free-mail senders and unknown senders in Spam never create jobs. OA/interview/offer emails only create one if they come from an assessment, ATS or scheduling platform or mention your application. |
 
 The same job arriving from several sources becomes one row. Saving checks for a job at the same company with the same role, and updates it instead of adding a duplicate, unless both have different employer-site URLs (those are separate postings, such as two "SDE I" openings). A merged row keeps the employer-site URL over a LinkedIn/jobright one, and keeps its status.
