@@ -281,3 +281,12 @@ test('an ATS domain is not evidence for an employer with the same name', () => {
   // Oracle's own domain still counts.
   assert.equal(matchJob([oracle], { from_name: 'Oracle Talent Acquisition', from_domain: 'oracle.com', subject: 'We received your application', body: '' })?.id, 1);
 });
+
+test('a confirmation that mentions a possible assessment is not an OA', () => {
+  const body = 'Thank you for applying. As a next step, you may be asked to complete an online assessment.';
+  assert.equal(classify({ from_domain: 'myworkday.com', subject: 'Your application to Software Systems Engineer, Data Labeling Engineering - Early Career is in!', body }).category, 'application_received');
+  assert.equal(classify({ from_domain: 'greenhouse.io', subject: 'Thank you for applying to Acme', body }).category, 'application_received');
+  // A reply in the same thread, or an assessment named in the subject, is still an OA.
+  assert.equal(classify({ from_domain: 'greenhouse.io', subject: 'Re: Thank you for applying to Acme', body: 'Please complete the online assessment by Friday.' }).category, 'oa');
+  assert.equal(classify({ from_domain: 'greenhouse.io', subject: 'Thank you for applying - online assessment', body }).category, 'oa');
+});

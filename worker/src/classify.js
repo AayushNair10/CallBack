@@ -97,6 +97,13 @@ const RECEIVED = [
   /^indeed application:/,
 ];
 
+// Subjects of a confirmation email, which often describes the assessment that may come next.
+const CONFIRMATION_SUBJECT = [
+  ...RECEIVED,
+  /\byour application (?:to|for) .+ is in\b/,
+  /\bsuccessfully submitted\b/,
+];
+
 const OUTREACH = [
   /\bcame across your (?:profile|resume|background|linkedin)\b/,
   /\bare you open to\b/,
@@ -205,6 +212,9 @@ function categorize({ domain, subject, text, listUnsub, platform }) {
   if (rejection) return 'rejection';
   if (anyOf(OUTREACH, text) && !APPLIED_CONTEXT.test(text)) return 'recruiter_outreach';
   if (offer) return 'offer';
+  // A confirmation (not a reply to one) whose subject doesn't mention an assessment isn't an OA.
+  const confirmation = !/^(?:re|fwd?):/.test(subject) && anyOf(CONFIRMATION_SUBJECT, subject) && !anyOf(OA, subject);
+  if (platform !== 'oa' && confirmation && anyOf(OA, text)) return 'application_received';
   if ((platform === 'oa' && anyOf(INVITE, text)) || anyOf(OA, text)) return 'oa';
   if (anyOf(INTERVIEW, text) || (platform === 'scheduling' && SCHEDULING_WORDS.test(text))) return 'interview';
   if (anyOf(RECEIVED, text)) return 'application_received';
