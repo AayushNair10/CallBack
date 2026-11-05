@@ -14,7 +14,7 @@ export const SCHEDULING_DOMAINS = [
 export const ATS_DOMAINS = [
   'greenhouse.io', 'greenhouse-mail.io', 'lever.co', 'myworkday.com', 'myworkdayjobs.com',
   'ashbyhq.com', 'icims.com', 'smartrecruiters.com', 'jobvite.com', 'workable.com',
-  'workablemail.com', 'successfactors.com', 'taleo.net', 'oraclecloud.com', 'bamboohr.com',
+  'workablemail.com', 'successfactors.com', 'taleo.net', 'oraclecloud.com', 'cloud.oracle.com', 'bamboohr.com',
   'jazzhr.com', 'breezy.hr', 'eightfold.ai', 'phenompeople.com', 'avature.net', 'recruitee.com',
   'teamtailor.com', 'dover.com',
 ];

@@ -29,7 +29,10 @@ const titleCase = (s) => s.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUp
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A company name never reads like a sentence ("LinkedIn We have received your application").
-const SENTENCE_WORD = /\b(?:we|have|has|your|our|you|received|receiving|application|applying|applied|thank|thanks|please|will|regarding)\b/i;
+// "Applied" is fine as the first word ("Applied Materials").
+const SENTENCE_WORD = /\b(?:we|have|has|your|our|you|received|receiving|application|applying|thank|thanks|please|will|regarding)\b|(?<!^)\bapplied\b/i;
+// ...and isn't a job title ("Your application to Software Systems Engineer is in!").
+const ROLE_NOUN = /\b(?:engineers?|developers?|scientists?|analysts?|interns?|internship|designers?|programmers?|architects?|specialists?|researchers?|sde|swe|sre|new grad|technicians?|administrators?|coordinators?|recruiters?)\b/i;
 
 function validCompany(s, { allowBoards = false } = {}) {
   let c = clean(s)
@@ -41,7 +44,7 @@ function validCompany(s, { allowBoards = false } = {}) {
   const domainLike = c.match(/^(?:[\w-]+\.)*([\w-]+)\.(?:com|net|org|io|ai|co|us|tech|dev|app)$/i);
   if (domainLike) c = titleCase(domainLike[1]);
   if (c.length < 2 || c.length > 60 || c.split(' ').length > 6) return null;
-  if (BAD_COMPANY.test(c) || SENTENCE_WORD.test(c)) return null;
+  if (BAD_COMPANY.test(c) || SENTENCE_WORD.test(c) || ROLE_NOUN.test(c)) return null;
   // Job boards and ATSs aren't employers, except an ATS sending for "LinkedIn Hiring Team".
   if (!allowBoards && (GENERIC_NAMES.has(c.toLowerCase()) || GENERIC_NAMES.has(c.split(/\s+/)[0].toLowerCase()))) return null;
   if (!/[a-z]/i.test(c)) return null;
@@ -87,7 +90,8 @@ export function companyFromSender(name, { allowBoards = false } = {}) {
   const domainLike = n.replace(/^[^A-Za-z0-9]+/, '').match(/^(?:[\w-]+\.)*([\w-]+)\.(?:com|net|org|io|ai|co|us|tech|dev|app)$/i);
   if (domainLike) n = domainLike[1]; // "Careers @ .questdiagnostics.com"
   const stripped = n.replace(/\s*[|–—:.-]+\s*/g, ' ').replace(SENDER_NOISE, ' ').replace(/\s+/g, ' ').trim();
-  const org = !!at || compact(stripped) !== compact(n);
+  // Recruiting words or a legal suffix ("Zensar Technologies Ltd") mean an organization.
+  const org = !!at || compact(stripped) !== compact(n) || /\b(?:LLC|L\.L\.C|Inc|Ltd|Corp|Corporation|GmbH|PLC)\b\.?$/i.test(stripped);
   const valid = validCompany(stripped, { allowBoards });
   return valid ? { name: valid, org } : null;
 }

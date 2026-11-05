@@ -197,3 +197,19 @@ test('real-inbox cases from the second import', () => {
   assert.equal(run('Sentry', 'no-reply@ashbyhq.com', 'Thank you for applying to become a Sentaur!', 'We received your application.'), 'Sentry');
   assert.equal(run('Rivian Automotive, LLC', 'rivian+autoreply@talent.icims.com', 'Thank You for Applying at Rivian Automotive, LLC', 'Thanks.'), 'Rivian Automotive');
 });
+
+test('real-inbox cases from the third import', () => {
+  const run = (from_name, from_addr, subject, body, category = 'application_received') => {
+    const from_domain = from_addr.split('@')[1];
+    return jobFromEmail({ from_name, from_addr, from_domain, subject, body }, category)?.company ?? null;
+  };
+  // "Applied" starting a company name isn't a sentence.
+  assert.equal(run('Applied Materials Human Resources', 'amat@myworkday.com',
+    'Thank you for applying! | R2630683 Software Engineer, Bachelors Degree, New College Grad (Santa Clara) role', 'Thanks.'), 'Applied Materials');
+  // A role after "application to" isn't the company; the Workday tenant is used instead.
+  assert.equal(run(null, 'generalmotors@myworkday.com',
+    'Your application to Software Systems Engineer, Data Labeling Engineering - Early Career is in!', 'Thanks for applying.'), 'Generalmotors');
+  // Oracle Recruiting Cloud sends for other employers.
+  assert.equal(run('Zensar Technologies Ltd', 'zenorc@workflow.mail.ap1.cloud.oracle.com', 'Thank you for your application',
+    'Thank you for applying for the Software Engineer (AI) position.'), 'Zensar Technologies');
+});

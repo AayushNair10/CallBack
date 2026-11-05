@@ -1,6 +1,6 @@
 // Match an email to a saved job using company aliases. Pure functions.
 
-import { domainIn, ATS_DOMAINS, JOB_BOARD_DOMAINS } from './classify.js';
+import { domainIn, platformFor, ATS_DOMAINS, JOB_BOARD_DOMAINS } from './classify.js';
 
 const SUFFIXES = new Set([
   'inc', 'llc', 'ltd', 'corp', 'corporation', 'co', 'company', 'com', 'plc', 'gmbh', 'the',
@@ -136,11 +136,18 @@ function roleWords(role) {
   return [...new Set(normalize(role).split(' '))].filter((w) => w.length >= 2 && !ROLE_STOPWORDS.has(w));
 }
 
+// The sender's domain, or '' when it belongs to a job board, ATS, assessment or scheduling
+// platform: "workflow.mail.ap1.cloud.oracle.com" sends for many employers, not for Oracle.
+function employerDomain(from) {
+  const domain = String(from || '').toLowerCase();
+  return platformFor(domain) || domainIn(domain, JOB_BOARD_DOMAINS) ? '' : domain;
+}
+
 // True when the sender name, subject or sender domain names the job's company, as opposed
 // to a mention somewhere in the body (a footer, "if it's clear…", a newsletter).
 export function namedBySender(job, email) {
   const head = ` ${normalize([email.from_name, email.subject].join(' '))} `;
-  const domain = String(email.from_domain || '').toLowerCase();
+  const domain = employerDomain(email.from_domain);
   const label = domain.split('.').slice(-2, -1)[0] || '';
   return jobAliases(job).some((a) => {
     const flat = a.replace(/ /g, '');
@@ -156,7 +163,7 @@ export function matchJob(jobs, email) {
   // only count in the sender name or subject, never the body.
   const head = ` ${normalize([email.from_name, email.subject].join(' '))} `;
   const subject = ` ${normalize(email.subject)} `;
-  const domain = String(email.from_domain || '').toLowerCase().replace(/[^a-z0-9.]/g, '');
+  const domain = employerDomain(email.from_domain).replace(/[^a-z0-9.]/g, '');
 
   let best = null;
   let bestScore = 0;

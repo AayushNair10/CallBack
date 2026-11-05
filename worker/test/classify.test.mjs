@@ -270,3 +270,14 @@ test('short forms only match in the sender name or subject; namedBySender', () =
 test('LeetCode digests are newsletters even without List-Unsubscribe', () => {
   assert.equal(cat({ from_domain: 'leetcode.com', subject: 'LeetCode Weekly Digest', body: 'This week: top coding challenge questions asked in Microsoft and Adobe online assessments.' }), 'newsletter');
 });
+
+test('an ATS domain is not evidence for an employer with the same name', () => {
+  const oracle = { id: 1, company: 'Oracle', role: 'Platform Software Engineer 2', aliases: 'oracle', status: 'applied' };
+  const zensar = { id: 2, company: 'Zensar Technologies', role: 'Software Engineer (AI)', aliases: 'zensar technologies', status: 'applied' };
+  const email = { from_name: 'Zensar Technologies Ltd', from_domain: 'workflow.mail.ap1.cloud.oracle.com', subject: 'Thank you for your application', body: 'Thank you for applying.' };
+  assert.equal(matchJob([oracle, zensar], email)?.id, 2);
+  assert.equal(matchJob([oracle], email), null);
+  assert.equal(namedBySender(oracle, email), false);
+  // Oracle's own domain still counts.
+  assert.equal(matchJob([oracle], { from_name: 'Oracle Talent Acquisition', from_domain: 'oracle.com', subject: 'We received your application', body: '' })?.id, 1);
+});
